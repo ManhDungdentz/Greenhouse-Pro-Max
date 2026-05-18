@@ -3,105 +3,93 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from datetime import timedelta
 import re
 
-st.set_page_config(page_title="Hệ thống Cảnh báo VPD Pro", layout="wide")
+st.set_page_config(page_title="Dashboard AH4 Pro", layout="wide")
+st.title("🌿 Hệ Thống Quản Trắc & Cảnh Báo VPD")
 
 # --- HÀM TÍNH TOÁN VPD ---
 def calculate_vpd(temp, humi):
-    """
-    Công thức tính VPD (kPa):
-    VPsat = 0.61078 * exp((17.27 * T) / (T + 237.3))
-    VPair = VPsat * (RH / 100)
-    VPD = VPsat - VPair
-    """
-    if temp is None or humi is None: return None
+    if temp is None or humi is None or pd.isna(temp) or pd.isna(humi): return None
     vpsat = 0.61078 * np.exp((17.27 * temp) / (temp + 237.3))
     vpair = vpsat * (humi / 100)
     return round(vpsat - vpair, 2)
 
 def get_vpd_advice(vpd):
-    if vpd < 0.4:
-        return "🔴 QUÁ THẤP", "Nguy cơ nấm bệnh cao. Cần: Tăng nhiệt độ hoặc Giảm độ ẩm (Bật quạt thông gió).", "#FF4B4B"
-    elif 0.4 <= vpd <= 0.8:
-        return "🟡 THẤP (Nhân giống)", "Phù hợp cho cây con/nhân giống. Cây lớn: Tăng nhẹ thông thoáng.", "#FFD700"
-    elif 0.8 < vpd <= 1.2:
-        return "🟢 LÝ TƯỞNG", "Cây quang hợp tốt nhất. Giữ nguyên điều kiện hiện tại.", "#00C851"
-    elif 1.2 < vpd <= 1.6:
-        return "🟡 CAO", "Cây thoát hơi nước nhanh. Cần: Giảm nhiệt độ hoặc Tăng độ ẩm (Phun sương).", "#FFA500"
-    else:
-        return "🔴 QUÁ CAO", "Cây bị stress nhiệt, đóng lỗ khí. Cần: Giảm nhiệt khẩn cấp, che nắng, phun sương mạnh.", "#8B0000"
+    if vpd is None or pd.isna(vpd): return "N/A", "Không đủ dữ liệu", "#808080"
+    if vpd < 0.4: return "🔴 QUÁ THẤP", "Nguy cơ nấm bệnh. Cần tăng nhiệt hoặc giảm ẩm.", "#FF4B4B"
+    if 0.4 <= vpd <= 0.8: return "🟡 THẤP", "Tốt cho nhân giống.", "#FFD700"
+    if 0.8 < vpd <= 1.2: return "🟢 LÝ TƯỞNG", "Cây quang hợp tốt nhất.", "#00C851"
+    if 1.2 < vpd <= 1.6: return "🟡 CAO", "Cần giảm nhiệt hoặc phun sương tăng ẩm.", "#FFA500"
+    return "🔴 QUÁ CAO", "Stress nhiệt nặng! Cần giảm nhiệt khẩn cấp.", "#8B0000"
 
 # --- XỬ LÝ DỮ LIỆU ---
 def process_data(file):
-    df = pd.read_json(file)
-    # Chuẩn hóa tên cột (Vì file của bạn có lúc dùng 'Nhiệt Độ', lúc dùng 'tempKK')
-    col_map = {
-        'Nhiệt Độ': 'temp', 'tempKK': 'temp',
-        'Độ ẩm': 'humi', 'humiKK': 'humi',
-        'Thời gian': 'time'
-    }
+    try:
+        df = pd.read_json(file)
+    except: return pd.DataFrame()
+
+    if 'Thời gian' in df.columns:
+        df['Thời gian'] = pd.to_datetime(df['Thời gian'].astype(str).str.replace('-', ' ', n=2).str.replace('-', ':'), errors='coerce')
+        df = df.dropna(subset=['Thời gian']).sort_values('Thời gian')
+    
+    # Chuẩn hóa tên cột để tính VPD
+    col_map = {'Nhiệt Độ': 'temp', 'tempKK': 'temp', 'Độ ẩm': 'humi', 'humiKK': 'humi'}
     df = df.rename(columns=col_map)
     
-    # Chuyển đổi số liệu sạch
+    # Sửa lỗi AttributeError: Kiểm tra cột có tồn tại hay không trước khi xử lý
     for col in ['temp', 'humi']:
         if col in df.columns:
-            df[col] = pd.to_numeric(df[col].astype(str).str.extract('(\d+\.?\d*)')[0], errors='coerce')
-    
-    # Xử lý sai lệch đơn vị (Ví dụ Nhiệt độ 335 -> 33.5)
-    if 'temp' in df.columns:
-        df.loc[df['temp'] > 100, 'temp'] = df['temp'] / 10
-    if 'humi' in df.columns:
-        df.loc[df['humi'] > 100, 'humi'] = df['humi'] / 10
+            # Trích xuất số từ chuỗi (Xử lý trường hợp dữ liệu có kèm đơn vị)
+            df[col] = pd.to_numeric(df[col].astype(str).str.extract(r'(\d+\.?\d*)')[0], errors='coerce')
+            
+            # Xử lý sai lệch đơn vị (VD: 335 -> 33.5)
+            max_val = df[col].max()
+            if col == 'temp' and max_val > 100: df[col] = df[col] / 10
+            if col == 'humi' and max_val > 100: df[col] = df[col] / 10
 
-    # Tính VPD cho từng dòng
     if 'temp' in df.columns and 'humi' in df.columns:
-        df['VPD'] = df.apply(lambda row: calculate_vpd(row['temp'], row['humi']), axis=1)
+        df['VPD'] = df.apply(lambda r: calculate_vpd(r.get('temp'), r.get('humi')), axis=1)
     
     return df
 
-# --- GIAO DIỆN ---
-st.title("🌿 Công cụ Phân tích & Cảnh báo VPD")
-
-uploaded_file = st.file_uploader("Tải file dữ liệu nông nghiệp (.json)", type=['json'])
+uploaded_file = st.sidebar.file_uploader("Tải file JSON", type=['json'])
 
 if uploaded_file:
     df = process_data(uploaded_file)
-    
-    # 1. Hiển thị trạng thái hiện tại (Dòng cuối cùng)
-    last_row = df.iloc[-1]
-    vpd_val = last_row['VPD']
-    status, advice, color = get_vpd_advice(vpd_val)
+    if not df.empty:
+        # --- Sidebar: Lọc dữ liệu ---
+        st.sidebar.header("⚙️ Cấu hình")
+        view_opt = st.sidebar.selectbox("Gộp dữ liệu:", ["Gốc", "Giờ", "Ngày"])
+        
+        if 'STT' in df.columns:
+            stt_list = ["Tất cả"] + sorted(df['STT'].unique().astype(str).tolist())
+            sel_stt = st.sidebar.selectbox("Chọn Trạm (STT):", stt_list)
+            if sel_stt != "Tất cả":
+                df = df[df['STT'].astype(str) == sel_stt]
 
-    st.markdown(f"### 📍 Trạng thái hiện tại (Lần đo cuối)")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Nhiệt độ", f"{last_row['temp']} °C")
-    c2.metric("Độ ẩm", f"{last_row['humi']} %")
-    c3.markdown(f"<div style='padding:10px; border-radius:10px; background-color:{color}; color:white; text-align:center;'><b>VPD: {vpd_val} kPa</b><br>{status}</div>", unsafe_allow_html=True)
-    c4.info(f"**Lời khuyên:** {advice}")
+        # --- Hiển thị VPD Hiện Tại ---
+        if 'VPD' in df.columns and not df['VPD'].dropna().empty:
+            last = df.dropna(subset=['VPD']).iloc[-1]
+            status, advice, color = get_vpd_advice(last['VPD'])
+            
+            st.subheader("📍 Cảnh báo trạng thái mới nhất")
+            c1, c2, c3 = st.columns([1, 1, 2])
+            c1.metric("Nhiệt độ", f"{last['temp']}°C")
+            c1.metric("Độ ẩm", f"{last['humi']}%")
+            c2.markdown(f"<div style='padding:20px; border-radius:10px; background-color:{color}; color:white; text-align:center; font-size:24px;'><b>VPD: {last['VPD']} kPa</b><br><small>{status}</small></div>", unsafe_allow_html=True)
+            c3.info(f"**Lời khuyên:** {advice}")
 
-    # 2. Giả lập thông báo điện thoại
-    if vpd_val > 1.6 or vpd_val < 0.4:
-        st.toast(f"🚨 CẢNH BÁO: VPD đang ở mức nguy hiểm ({vpd_val} kPa)!", icon="⚠️")
-        st.sidebar.warning(f"📲 Đang gửi thông báo tới điện thoại: VPD {status}!")
-
-    # 3. Biểu đồ VPD theo thời gian
-    st.markdown("---")
-    st.subheader("📈 Biểu đồ diễn biến VPD")
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df.index, y=df['VPD'], mode='lines+markers', name='VPD (kPa)', line=dict(color='green', width=3)))
-    
-    # Vẽ các vùng ranh giới
-    fig.add_hrect(y0=0.8, y1=1.2, fillcolor="green", opacity=0.1, annotation_text="Lý tưởng", annotation_position="top left")
-    fig.add_hrect(y0=1.6, y1=3.0, fillcolor="red", opacity=0.1, annotation_text="Nguy hiểm (Khô)", annotation_position="top left")
-    
-    fig.update_layout(hovermode="x unified", yaxis_title="kPa")
-    st.plotly_chart(fig, use_container_width=True)
-
-    # 4. Bảng dữ liệu lọc các trường hợp bất thường
-    with st.expander("🔍 Danh sách các thời điểm VPD bất thường"):
-        bad_df = df[(df['VPD'] > 1.6) | (df['VPD'] < 0.4)]
-        st.write(bad_df[['temp', 'humi', 'VPD']])
-
-else:
-    st.info("Vui lòng tải file để hệ thống tính toán áp suất VPD.")
+            # --- Biểu đồ ---
+            freq_map = {"Giờ": "1H", "Ngày": "1D", "Gốc": None}
+            freq = freq_map[view_opt]
+            df_p = df.set_index('Thời gian').resample(freq).mean(numeric_only=True).reset_index() if freq else df
+            
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, subplot_titles=("Diễn biến VPD (kPa)", "Nhiệt độ & Độ ẩm"))
+            fig.add_trace(go.Scatter(x=df_p['Thời gian'], y=df_p['VPD'], name="VPD", line=dict(color='green')), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df_p['Thời gian'], y=df_p['temp'], name="Nhiệt độ"), row=2, col=1)
+            fig.add_trace(go.Scatter(x=df_p['Thời gian'], y=df_p['humi'], name="Độ ẩm"), row=2, col=1)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("Dữ liệu trạm này không có đủ thông số Nhiệt độ/Độ ẩm để tính VPD.")
