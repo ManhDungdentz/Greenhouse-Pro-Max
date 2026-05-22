@@ -48,6 +48,7 @@ def get_greenhouse_advice(vpd, stage):
     if "Cây con" in stage: i_min, i_max = 0.4, 0.8
     elif "Sinh trưởng" in stage: i_min, i_max = 0.8, 1.2
     else: i_min, i_max = 1.2, 1.5
+    
     if vpd < i_min - 0.2: return "🔴 QUÁ THẤP", "Nguy cơ nấm bệnh!", "#FF4B4B"
     if i_min <= vpd <= i_max: return "🟢 LÝ TƯỞNG", "Cây phát triển tốt.", "#00C851"
     if vpd > i_max + 0.3: return "🔴 QUÁ CAO", "Stress nhiệt nặng!", "#8B0000"
@@ -61,10 +62,12 @@ def process_data(file):
     if 'Thời gian' in df.columns:
         df['Thời gian'] = pd.to_datetime(df['Thời gian'].astype(str).str.replace('-', ' ', n=2).str.replace('-', ':'), errors='coerce', utc=True).dt.tz_localize(None)
         df = df.dropna(subset=['Thời gian']).sort_values('Thời gian')
+    
     t_cols = [c for c in ['Nhiệt Độ', 'tempKK'] if c in df.columns]
     if t_cols: df['temp'] = df[t_cols].bfill(axis=1).iloc[:, 0]
     h_cols = [c for c in ['Độ ẩm', 'humiKK'] if c in df.columns]
     if h_cols: df['humi'] = df[h_cols].bfill(axis=1).iloc[:, 0]
+    
     for col in ['temp', 'humi']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col].astype(str).str.extract(r'(\d+\.?\d*)')[0], errors='coerce')
@@ -90,7 +93,6 @@ with st.sidebar:
 if uploaded_file:
     df = process_data(uploaded_file)
     if not df.empty:
-        # --- ĐÂY LÀ PHẦN CHỌN THỜI GIAN ÔNG TÌM ---
         st.sidebar.header("🔍 Lọc dữ liệu")
         df['Tháng'] = df['Thời gian'].dt.strftime('%m/%Y')
         
@@ -124,7 +126,6 @@ if uploaded_file:
             m1.metric("Nhiệt độ", f"{round(last['temp'], 1)} °C")
             m1.metric("Độ ẩm", f"{round(last['humi'], 1)} %")
             
-            # Cục thông báo VPD (đã thu nhỏ bớt padding)
             html_box = f'<div style="background-color:{color}; padding:15px; border-radius:10px; color:white; text-align:center;"><h3 style="margin:0;">VPD: {last["VPD"]} kPa</h3><b>{status}</b></div>'
             m2.markdown(html_box, unsafe_allow_html=True)
             m3.warning(f"**Chỉ đạo:** {advice}")
@@ -145,7 +146,24 @@ if uploaded_file:
             # THỐNG KÊ
             st.subheader("📋 Thống kê chi tiết")
             st.table(df_valid[['temp', 'humi', 'VPD']].agg(['max', 'min', 'mean']).round(2))
-            st.dataframe(df_valid[['Thời gian', 'STT', 'temp', 'humi', 'VPD']].sort_values('Thời gian', ascending=False), use_container_width=True)
+            
+            # --- PHẦN NHUỘM MÀU BẢNG DỮ LIỆU ---
+            def highlight_alert(row):
+                # Lấy ngưỡng dựa trên giai đoạn cây
+                if "Cây con" in growth_stage: i_min, i_max = 0.4, 0.8
+                elif "Sinh trưởng" in growth_stage: i_min, i_max = 0.8, 1.2
+                else: i_min, i_max = 1.2, 1.5
+                
+                # Nếu VPD nằm ngoài ngưỡng an toàn (có trừ hao nhẹ như hàm advice)
+                if row['VPD'] < (i_min - 0.2) or row['VPD'] > (i_max + 0.3):
+                    return ['background-color: #FFC7CE; color: #9C0006; font-weight: bold'] * len(row)
+                return [''] * len(row)
+
+            # Áp dụng style vào dataframe
+            styled_df = df_valid[['Thời gian', 'STT', 'temp', 'humi', 'VPD']].sort_values('Thời gian', ascending=False).style.apply(highlight_alert, axis=1)
+            
+            st.dataframe(styled_df, use_container_width=True)
+            
         else:
             st.error("🚨 Không tìm thấy dữ liệu trong khoảng thời gian/trạm đã chọn.")
 else:
