@@ -7,11 +7,11 @@ from datetime import timedelta
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import requests # Cần thư viện này để gửi Zalo
+import requests
 
 # --- CẤU HÌNH TRANG ---
 st.set_page_config(page_title="Greenhouse Pro Max", layout="wide")
-st.title("🌿 Hệ Thống Giám Sát Nhà Kính (Gmail + Zalo)")
+st.title("🌿 Hệ Thống Giám Sát Nhà Kính (Bản Full Đầy Đủ)")
 
 # --- HÀM GỬI ZALO ---
 def send_zalo_alert(phone, api_key, vpd, status, temp, humi):
@@ -62,10 +62,13 @@ def process_data(file):
     if 'Thời gian' in df.columns:
         df['Thời gian'] = pd.to_datetime(df['Thời gian'].astype(str).str.replace('-', ' ', n=2).str.replace('-', ':'), errors='coerce', utc=True).dt.tz_localize(None)
         df = df.dropna(subset=['Thời gian']).sort_values('Thời gian')
+    
+    # Ưu tiên cột KK (Không khí) như ông dặn
     t_cols = [c for c in ['tempKK', 'Nhiệt Độ'] if c in df.columns]
     if t_cols: df['temp'] = df[t_cols].bfill(axis=1).iloc[:, 0]
     h_cols = [c for c in ['humiKK', 'Độ ẩm'] if c in df.columns]
     if h_cols: df['humi'] = df[h_cols].bfill(axis=1).iloc[:, 0]
+    
     for col in ['temp', 'humi']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col].astype(str).str.extract(r'(\d+\.?\d*)')[0], errors='coerce')
@@ -79,7 +82,7 @@ def process_data(file):
     if not df.empty: df['VPD'] = df.apply(lambda r: calculate_vpd(r['temp'], r['humi']), axis=1)
     return df
 
-# --- SIDEBAR: GMAIL & ZALO ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.header("📧 Cấu hình Thông báo")
     tab1, tab2 = st.tabs(["Gmail", "Zalo"])
@@ -88,7 +91,7 @@ with st.sidebar:
         u_pass = st.text_input("Mật khẩu ứng dụng:", type="password")
         t_mail = st.text_input("Gmail nhận:")
     with tab2:
-        z_phone = st.text_input("SĐT Zalo (VD: 8490xxx):")
+        z_phone = st.text_input("SĐT Zalo (84...):")
         z_api = st.text_input("Zalo API Key:", type="password")
     
     st.divider()
@@ -97,7 +100,7 @@ with st.sidebar:
 if uploaded_file:
     df = process_data(uploaded_file)
     if not df.empty:
-        # Lọc dữ liệu (Giữ nguyên của ông)
+        # Lọc dữ liệu
         st.sidebar.header("🔍 Lọc dữ liệu")
         df['Tháng'] = df['Thời gian'].dt.strftime('%m/%Y')
         filter_mode = st.sidebar.radio("Lọc theo:", ["Tất cả", "Tháng", "Khoảng ngày"])
@@ -106,14 +109,14 @@ if uploaded_file:
             df_work = df[df['Tháng'].isin(sel_m)].copy()
         elif filter_mode == "Khoảng ngày":
             c1, c2 = st.sidebar.columns(2)
-            start = pd.to_datetime(c1.date_input("Từ", df['Thời gian'].min()))
-            end = pd.to_datetime(c2.date_input("Đến", df['Thời gian'].max())) + timedelta(days=1)
+            start = pd.to_datetime(c1.date_input("Từ ngày", df['Thời gian'].min()))
+            end = pd.to_datetime(c2.date_input("Đến ngày", df['Thời gian'].max())) + timedelta(days=1)
             df_work = df[(df['Thời gian'] >= start) & (df['Thời gian'] < end)].copy()
         else: df_work = df.copy()
 
-        growth_stage = st.sidebar.radio("Giai đoạn:", ["🌱 Cây con", "🌿 Sinh trưởng", "🍅 Ra hoa"], index=1)
+        growth_stage = st.sidebar.radio("Giai đoạn cây:", ["🌱 Cây con", "🌿 Sinh trưởng", "🍅 Ra hoa"], index=1)
         stt_list = ["Tất cả"] + sorted(df_work['STT'].unique().tolist())
-        sel_stt = st.sidebar.selectbox("📍 Trạm:", stt_list)
+        sel_stt = st.sidebar.selectbox("📍 Chọn Trạm:", stt_list)
         if sel_stt != "Tất cả": df_work = df_work[df_work['STT'] == sel_stt]
 
         df_valid = df_work.dropna(subset=['VPD'])
@@ -121,28 +124,47 @@ if uploaded_file:
             last = df_valid.iloc[-1]
             status, advice, color = get_greenhouse_advice(last['VPD'], growth_stage)
             
-            st.subheader("📍 Trạng thái trạm đo")
+            # Dashboard Trạng thái
+            st.subheader("📍 Trạng thái hiện tại")
             m1, m2, m3 = st.columns([1, 1.2, 1.8])
             m1.metric("Nhiệt độ", f"{round(last['temp'], 1)} °C")
             m1.metric("Độ ẩm", f"{round(last['humi'], 1)} %")
-            
             html_box = f'<div style="background-color:{color}; padding:15px; border-radius:10px; color:white; text-align:center;"><h3 style="margin:0;">VPD: {last["VPD"]} kPa</h3><b>{status}</b></div>'
             m2.markdown(html_box, unsafe_allow_html=True)
             m3.warning(f"**Chỉ đạo:** {advice}")
 
-            # NÚT GỬI CẢNH BÁO SONG SONG
+            # Nút gửi cảnh báo
             if "🔴" in status:
-                col_btn1, col_btn2 = st.columns(2)
-                if col_btn1.button("📧 Gửi Gmail"):
-                    if send_email_alert(u_mail, u_pass, t_mail, last['VPD'], status, last['temp'], last['humi']):
-                        st.success("✅ Đã gửi Gmail!")
-                if col_btn2.button("💬 Gửi Zalo"):
-                    if send_zalo_alert(z_phone, z_api, last['VPD'], status, last['temp'], last['humi']):
-                        st.success("✅ Đã gửi Zalo!")
+                c_btn1, c_btn2 = st.columns(2)
+                if c_btn1.button("📧 Gửi Gmail"):
+                    if send_email_alert(u_mail, u_pass, t_mail, last['VPD'], status, last['temp'], last['humi']): st.success("✅ Đã gửi Gmail!")
+                if c_btn2.button("💬 Gửi Zalo"):
+                    if send_zalo_alert(z_phone, z_api, last['VPD'], status, last['temp'], last['humi']): st.success("✅ Đã gửi Zalo!")
 
-            # BẢNG DỮ LIỆU TÔ MÀU (Nền hồng chữ đỏ như ông muốn)
+            # Biểu đồ
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1)
+            fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['VPD'], name="VPD (kPa)", line=dict(color='green')), 1, 1)
+            fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['temp'], name="Temp (°C)"), 2, 1)
+            fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['humi'], name="Humi (%)"), 2, 1)
+            st.plotly_chart(fig, use_container_width=True)
+
+            # --- ĐÂY LÀ PHẦN ÔNG CẦN: BẢNG MAX, MIN, MEAN ---
+            st.subheader("📊 Thống kê chỉ số (Max, Min, Trung bình)")
+            # Tạo bảng thống kê đẹp hơn
+            stats_df = df_valid[['temp', 'humi', 'VPD']].agg(['max', 'min', 'mean']).round(2)
+            stats_df.index = ['Lớn nhất (Max)', 'Nhỏ nhất (Min)', 'Trung bình (Mean)']
+            st.table(stats_df)
+
+            # Bảng chi tiết nhuộm màu hồng-đỏ
             st.subheader("📋 Chi tiết bản ghi")
-            def style_critical(row):
-                return ['background-color: #FFC7CE; color: #9C0006; font-weight: bold'] * len(row) if (row['VPD'] > 1.5 or row['VPD'] < 0.4) else [''] * len(row)
+            def style_row(row):
+                if row['VPD'] > 1.5 or row['VPD'] < 0.4:
+                    return ['background-color: #FFC7CE; color: #9C0006; font-weight: bold'] * len(row)
+                return [''] * len(row)
 
-            st.dataframe(df_valid[['Thời gian', 'STT', 'temp', 'humi', 'VPD']].sort_values('Thời gian', ascending=False).style.apply(style_critical, axis=1), use_container_width=True)
+            st.dataframe(
+                df_valid[['Thời gian', 'STT', 'temp', 'humi', 'VPD']]
+                .sort_values('Thời gian', ascending=False)
+                .style.apply(style_row, axis=1), 
+                use_container_width=True
+            )
