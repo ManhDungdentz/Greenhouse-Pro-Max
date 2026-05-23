@@ -9,8 +9,8 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 # --- CẤU HÌNH TRANG ---
-st.set_page_config(page_title="Greenhouse Pro Max - Clean Data", layout="wide")
-st.title("🌿 Hệ Thống Giám Sát Nhà Kính (Bản Fix Dữ Liệu Tào Lao)")
+st.set_page_config(page_title="Greenhouse Pro Max", layout="wide")
+st.title("🌿 Hệ Thống Giám Sát Nhà Kính (Đã nhả bộ lọc)")
 
 # --- HÀM GỬI EMAIL ---
 def send_email_alert(sender_mail, app_password, receiver_mail, vpd, status, temp, humi):
@@ -54,7 +54,7 @@ def get_greenhouse_advice(vpd, stage):
     if vpd > i_max + 0.3: return "🔴 QUÁ CAO", "Stress nhiệt nặng!", "#8B0000"
     return "🟡 HƠI LỆCH", "Cần điều chỉnh nhẹ.", "#FFA500"
 
-# --- XỬ LÝ DỮ LIỆU & BỘ LỌC CHỐT HẠ ---
+# --- XỬ LÝ DỮ LIỆU ---
 def process_data(file):
     try:
         df = pd.read_json(file)
@@ -73,22 +73,19 @@ def process_data(file):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col].astype(str).str.extract(r'(\d+\.?\d*)')[0], errors='coerce')
             
-            # --- BỘ LỌC CHỐT HẠ: XỬ LÝ DỮ LIỆU TÀO LAO ---
             if col == 'temp':
-                # 1. Sửa lỗi đơn vị (Vd: 332 -> 33.2)
                 df.loc[df[col] > 100, col] = df[col] / 10 
-                # 2. CHẶN TRẦN: Loại bỏ mọi thứ > 42 độ C (Xử lý trạm 5 bị lỗi)
-                df.loc[(df[col] < 5) | (df[col] > 42), col] = np.nan
+                # ĐÃ NỚI LỎNG: Nâng lên 60 độ để không mất dữ liệu của trạm nóng
+                df.loc[(df[col] < 5) | (df[col] > 60), col] = np.nan
             
             if col == 'humi':
-                # Chặn độ ẩm thực tế nhà kính 10-100%
                 df.loc[(df[col] < 10) | (df[col] > 100), col] = np.nan
     
     df = df.dropna(subset=['temp', 'humi']).copy()
     
-    # 3. Lọc trượt: Nếu nhiệt độ nhảy vọt > 5 độ bất ngờ (nhiễu cảm biến) -> Xóa
+    # LỌC CỘT ĐÌNH: Chỉ xóa nếu nhiệt độ vọt > 15 độ một cách phi lý
     if len(df) > 1:
-        df = df[df['temp'].diff().abs() < 5] 
+        df = df[df['temp'].diff().abs() < 15] 
         
     if not df.empty: 
         df['VPD'] = df.apply(lambda r: calculate_vpd(r['temp'], r['humi']), axis=1)
@@ -132,7 +129,7 @@ if uploaded_file:
             last = df_valid.iloc[-1]
             status, advice, color = get_greenhouse_advice(last['VPD'], stage)
             
-            st.subheader("📍 Trạng thái hiện tại (Đã sạch nhiễu)")
+            st.subheader("📍 Trạng thái hiện tại")
             m1, m2, m3 = st.columns([1, 1.2, 1.8])
             m1.metric("Nhiệt độ", f"{round(last['temp'], 1)} °C")
             m1.metric("Độ ẩm", f"{round(last['humi'], 1)} %")
@@ -152,7 +149,7 @@ if uploaded_file:
                 else: st.error("❌ Lỗi cấu hình Gmail!")
 
             # BIỂU ĐỒ
-            st.subheader("📊 Biểu đồ diễn biến (Đã lọc cột đình)")
+            st.subheader("📊 Biểu đồ diễn biến")
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1)
             fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['VPD'], name="VPD (kPa)", line=dict(color='green', width=3)), row=1, col=1)
             fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['temp'], name="Nhiệt độ (°C)"), row=2, col=1)
@@ -161,7 +158,7 @@ if uploaded_file:
             st.plotly_chart(fig, use_container_width=True)
 
             # THỐNG KÊ
-            st.subheader("📋 Thống kê chuẩn")
+            st.subheader("📋 Thống kê")
             st.table(df_valid[['temp', 'humi', 'VPD']].agg(['max', 'min', 'mean']).round(2))
             
             # BẢNG DỮ LIỆU NHUỘM MÀU
@@ -180,6 +177,6 @@ if uploaded_file:
                 use_container_width=True
             )
         else:
-            st.error("🚨 Không có dữ liệu hợp lệ sau lọc. Hãy kiểm tra Trạm/Ngày đã chọn.")
+            st.error("🚨 Không có dữ liệu hợp lệ. Hãy thử chọn Trạm khác.")
 else:
     st.info("👈 Hãy tải file JSON để bắt đầu.")
