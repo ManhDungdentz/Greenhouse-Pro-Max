@@ -10,7 +10,7 @@ from email.mime.multipart import MIMEMultipart
 
 # --- CẤU HÌNH TRANG ---
 st.set_page_config(page_title="Greenhouse Pro Max", layout="wide")
-st.title("🌿 Hệ Thống Giám Sát Nhà Kính (Bản Vẽ Siêu Mượt)")
+st.title("🌿 Hệ Thống Giám Sát Nhà Kính (Bộ Lọc Đỉnh Cao)")
 
 # --- HÀM GỬI EMAIL ---
 def send_email_alert(sender_mail, app_password, receiver_mail, vpd, status, temp, humi):
@@ -75,17 +75,16 @@ def process_data(file):
             
             if col == 'temp':
                 df.loc[df[col] > 150, col] = df[col] / 10 
-                # Chuyển độ F sang độ C để số liệu nhỏ lại bình thường
+                # Đổi F sang C
                 df.loc[(df[col] >= 45) & (df[col] <= 120), col] = (df[col] - 32) * 5/9 
     
     df = df.dropna(subset=['temp', 'humi']).copy()
     
-    # --- KHỬ NHIỄU KHÔNG XÓA DỮ LIỆU ---
-    # Nhiệt độ nhảy vọt > 8 độ thì lấp bằng số của giây trước đó, chống gai nhọn
-    if len(df) > 1:
-        diff_temp = df['temp'].diff().abs()
-        df.loc[diff_temp > 8, 'temp'] = np.nan
-        df['temp'] = df['temp'].ffill() 
+    # --- BỘ LỌC TRUNG VỊ (ROLLING MEDIAN) ĐÁNH BAY MỌI CỘT ĐÌNH ---
+    # Lấy cửa sổ 5 điểm để gọt sạch các cú rớt mạng hoặc nhảy vọt bất thường
+    if len(df) > 5:
+        df['temp'] = df['temp'].rolling(window=5, center=True, min_periods=1).median()
+        df['humi'] = df['humi'].rolling(window=5, center=True, min_periods=1).median()
         
     if not df.empty: 
         df['VPD'] = df.apply(lambda r: calculate_vpd(r['temp'], r['humi']), axis=1)
@@ -147,10 +146,9 @@ if uploaded_file:
                     st.success("✅ Đã gửi!")
                 else: st.error("❌ Lỗi cấu hình Gmail!")
 
-            # --- BIỂU ĐỒ SIÊU MƯỢT (line_shape='spline') ---
+            # BIỂU ĐỒ (Áp dụng spline uốn cong)
             st.subheader("📊 Biểu đồ diễn biến")
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1)
-            # Dùng line_shape='spline' để uốn cong mượt mà như nét vẽ tay
             fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['VPD'], name="VPD (kPa)", line=dict(color='green', width=3, shape='spline')), row=1, col=1)
             fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['temp'], name="Nhiệt độ (°C)", line=dict(shape='spline')), row=2, col=1)
             fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['humi'], name="Độ ẩm (%)", line=dict(shape='spline')), row=2, col=1)
