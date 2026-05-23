@@ -10,7 +10,7 @@ from email.mime.multipart import MIMEMultipart
 
 # --- CẤU HÌNH TRANG ---
 st.set_page_config(page_title="Greenhouse Pro Max", layout="wide")
-st.title("🌿 Hệ Thống Giám Sát Nhà Kính (Bản Chuẩn - Cắt Lọc Lỗi Cảm Biến)")
+st.title("🌿 Hệ Thống Giám Sát Nhà Kính (Đã Fix Lỗi Hoàn Toàn)")
 
 # --- HÀM GỬI EMAIL ---
 def send_email_alert(sender_mail, app_password, receiver_mail, vpd, status, temp, humi):
@@ -74,18 +74,18 @@ def process_data(file):
             df[col] = pd.to_numeric(df[col].astype(str).str.extract(r'(\d+\.?\d*)')[0], errors='coerce')
             
             if col == 'temp':
-                df.loc[df[col] > 100, col] = df[col] / 10 
-                # CHỐT HẠ: Vượt 45 độ là rác, xóa!
-                df.loc[(df[col] < 5) | (df[col] > 45), col] = np.nan
-            
-            if col == 'humi':
-                df.loc[(df[col] < 10) | (df[col] > 100), col] = np.nan
+                df.loc[df[col] > 150, col] = df[col] / 10 
+                # ĐÂY RỒI: Dòng code sinh tử chuyển độ F sang độ C đã được trả lại!
+                df.loc[(df[col] >= 45) & (df[col] <= 120), col] = (df[col] - 32) * 5/9 
     
     df = df.dropna(subset=['temp', 'humi']).copy()
     
-    # Xóa nhiễu nếu nhiệt độ giật cục quá 10 độ
+    # --- CÁCH KHỬ NHIỄU MỚI (KHÔNG XÓA DỮ LIỆU) ---
+    # Nếu nhiệt độ giật cục > 8 độ, đổi thành NaN rồi lấy số liền trước đắp vào
     if len(df) > 1:
-        df = df[df['temp'].diff().abs() < 10] 
+        diff_temp = df['temp'].diff().abs()
+        df.loc[diff_temp > 8, 'temp'] = np.nan
+        df['temp'] = df['temp'].ffill() # Kỹ thuật lấp chỗ trống thông minh
         
     if not df.empty: 
         df['VPD'] = df.apply(lambda r: calculate_vpd(r['temp'], r['humi']), axis=1)
@@ -148,7 +148,7 @@ if uploaded_file:
                     st.success("✅ Đã gửi!")
                 else: st.error("❌ Lỗi cấu hình Gmail!")
 
-            # BIỂU ĐỒ
+            # BIỂU ĐỒ MƯỢT MÀ KHÔNG CỘT ĐÌNH
             st.subheader("📊 Biểu đồ diễn biến")
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1)
             fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['VPD'], name="VPD (kPa)", line=dict(color='green', width=3)), row=1, col=1)
@@ -177,8 +177,6 @@ if uploaded_file:
                 use_container_width=True
             )
         else:
-            # ĐÃ CẬP NHẬT LỜI CẢNH BÁO CHO RÕ RÀNG Ở ĐÂY
-            st.error("🚨 Không có dữ liệu hợp lệ. TOÀN BỘ dữ liệu của Trạm này trong khoảng thời gian đã chọn đều bị lỗi cảm biến (Nhiệt độ đo được > 45°C).")
-            st.warning("👉 Cách khắc phục: Vui lòng đổi sang chọn Trạm khác (VD: Trạm 1, 2) ở thanh bên trái để xem dữ liệu bình thường.")
+            st.error("🚨 Không có dữ liệu hợp lệ trong khoảng thời gian đã chọn.")
 else:
     st.info("👈 Hãy tải file JSON để bắt đầu.")
