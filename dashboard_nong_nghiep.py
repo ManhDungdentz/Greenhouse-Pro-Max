@@ -10,7 +10,7 @@ from email.mime.multipart import MIMEMultipart
 
 # --- CẤU HÌNH TRANG ---
 st.set_page_config(page_title="Greenhouse Pro Max", layout="wide")
-st.title("🌿 Hệ Thống Giám Sát Nhà Kính (Bản Vẽ Siêu Mượt - Đã Khử Nhiễu)")
+st.title("🌿 Hệ Thống Giám Sát Nhà Kính (Xử Lý Đứt Cáp)")
 
 # --- HÀM GỬI EMAIL ---
 def send_email_alert(sender_mail, app_password, receiver_mail, vpd, status, temp, humi):
@@ -75,19 +75,28 @@ def process_data(file):
             
             if col == 'temp':
                 df.loc[df[col] > 150, col] = df[col] / 10 
-                # Chuyển độ F sang độ C
                 df.loc[(df[col] >= 45) & (df[col] <= 120), col] = (df[col] - 32) * 5/9 
     
     df = df.dropna(subset=['temp', 'humi']).copy()
     
-    # --- CẬP NHẬT: LỌC TRUNG VỊ RỘNG HƠN ĐỂ GỌT PHẲNG GAI NHIỄU ---
-    # Xét cửa sổ 11 điểm (khoảng 10 giây dữ liệu) để gọt sạch mọi gai nhọn
+    # 1. BỘ LỌC TRUNG VỊ ĐỂ CHỐNG GAI NHIỄU (như đã hứa)
     if len(df) > 11:
         df['temp'] = df['temp'].rolling(window=11, center=True, min_periods=1).median()
         df['humi'] = df['humi'].rolling(window=11, center=True, min_periods=1).median()
         
     if not df.empty: 
         df['VPD'] = df.apply(lambda r: calculate_vpd(r['temp'], r['humi']), axis=1)
+        
+        # --- 2. CẮT ĐỨT ĐƯỜNG VẼ NẾU MẤT KẾT NỐI > 1 PHÚT ---
+        # Tìm những chỗ thời gian bị hổng
+        time_diffs = df['Thời gian'].diff()
+        gap_indices = df[time_diffs > pd.Timedelta(minutes=1)].index
+        
+        # Nhét giá trị rỗng (NaN) vào chỗ hổng để Plotly tự động ngắt nét vẽ
+        if len(gap_indices) > 0:
+            nan_rows = pd.DataFrame([{'Thời gian': df.loc[i, 'Thời gian'] - pd.Timedelta(seconds=1)} for i in gap_indices])
+            df = pd.concat([df, nan_rows]).sort_values('Thời gian').reset_index(drop=True)
+
     return df
 
 # --- THANH BÊN (SIDEBAR) ---
@@ -123,9 +132,11 @@ if uploaded_file:
         if sel_stt != "Tất cả": df_work = df_work[df_work['STT'] == sel_stt]
 
         # --- HIỂN THỊ CHỈ SỐ ---
-        df_valid = df_work.dropna(subset=['VPD'])
-        if not df_valid.empty:
-            last = df_valid.iloc[-1]
+        # Bỏ qua các dòng NaN vừa tạo để tính toán số liệu cuối cùng
+        df_valid_for_calc = df_work.dropna(subset=['VPD'])
+        
+        if not df_valid_for_calc.empty:
+            last = df_valid_for_calc.iloc[-1]
             status, advice, color = get_greenhouse_advice(last['VPD'], stage)
             
             st.subheader("📍 Trạng thái hiện tại")
@@ -147,23 +158,23 @@ if uploaded_file:
                     st.success("✅ Đã gửi!")
                 else: st.error("❌ Lỗi cấu hình Gmail!")
 
-            # --- BIỂU ĐỒ SIÊU MƯỢT (line_shape='spline') ---
+            # --- BIỂU ĐỒ TỰ ĐỘNG NGẮT KẾT NỐI (Giữ nguyên connectgaps=False mặc định) ---
             st.subheader("📊 Biểu đồ diễn biến")
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1)
-            fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['VPD'], name="VPD (kPa)", line=dict(color='green', width=3, shape='spline')), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['temp'], name="Nhiệt độ (°C)", line=dict(shape='spline')), row=2, col=1)
-            fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['humi'], name="Độ ẩm (%)", line=dict(shape='spline')), row=2, col=1)
+            fig.add_trace(go.Scatter(x=df_work['Thời gian'], y=df_work['VPD'], name="VPD (kPa)", line=dict(color='green', width=3, shape='spline')), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df_work['Thời gian'], y=df_work['temp'], name="Nhiệt độ (°C)", line=dict(shape='spline')), row=2, col=1)
+            fig.add_trace(go.Scatter(x=df_work['Thời gian'], y=df_work['humi'], name="Độ ẩm (%)", line=dict(shape='spline')), row=2, col=1)
             fig.update_layout(height=500, margin=dict(l=20, r=20, t=20, b=20), hovermode='x unified')
-            # Đảm bảo trục y cho VPD co lại hợp lý ở mức nhỏ gọn
             fig.update_yaxes(range=[0, 3], row=1, col=1)
             st.plotly_chart(fig, use_container_width=True)
 
             # THỐNG KÊ
             st.subheader("📋 Thống kê chỉ số")
-            st.table(df_valid[['temp', 'humi', 'VPD']].agg(['max', 'min', 'mean']).round(2))
+            st.table(df_valid_for_calc[['temp', 'humi', 'VPD']].agg(['max', 'min', 'mean']).round(2))
             
             # BẢNG DỮ LIỆU CHI TIẾT
             def highlight_alert(row):
+                if pd.isna(row['VPD']): return [''] * len(row)
                 if "Cây con" in stage: i_min, i_max = 0.4, 0.8
                 elif "Sinh trưởng" in stage: i_min, i_max = 0.8, 1.2
                 else: i_min, i_max = 1.2, 1.5
@@ -172,7 +183,7 @@ if uploaded_file:
                 return [''] * len(row)
 
             st.dataframe(
-                df_valid[['Thời gian', 'STT', 'temp', 'humi', 'VPD']]
+                df_valid_for_calc[['Thời gian', 'STT', 'temp', 'humi', 'VPD']]
                 .sort_values('Thời gian', ascending=False)
                 .style.apply(highlight_alert, axis=1),
                 use_container_width=True
