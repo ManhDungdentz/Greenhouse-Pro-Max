@@ -10,7 +10,7 @@ from email.mime.multipart import MIMEMultipart
 
 # --- CẤU HÌNH TRANG ---
 st.set_page_config(page_title="Greenhouse Pro Max", layout="wide")
-st.title("🌿 Hệ Thống Giám Sát Nhà Kính (Xử Lý Đứt Cáp)")
+st.title("🌿 Hệ Thống Giám Sát Nhà Kính (Bản Full Đầy Đủ)")
 
 # --- HÀM GỬI EMAIL ---
 def send_email_alert(sender_mail, app_password, receiver_mail, vpd, status, temp, humi):
@@ -52,14 +52,13 @@ def get_greenhouse_advice(vpd, stage):
     if vpd < i_min - 0.2: return "🔴 QUÁ THẤP", "Nguy cơ nấm bệnh!", "#FF4B4B"
     if i_min <= vpd <= i_max: return "🟢 LÝ TƯỞNG", "Cây phát triển tốt.", "#00C851"
     if vpd > i_max + 0.3: return "🔴 QUÁ CAO", "Stress nhiệt nặng!", "#8B0000"
-    return "🟡 HƠI LỆCH", "Cần điều chỉnh nhẹ thiết bị.", "#FFA500"
+    return "🟡 HƠI LỆCH", "Cần điều chỉnh nhẹ.", "#FFA500"
 
 # --- XỬ LÝ DỮ LIỆU ---
 def process_data(file):
     try:
         df = pd.read_json(file)
     except: return pd.DataFrame()
-    
     if 'Thời gian' in df.columns:
         df['Thời gian'] = pd.to_datetime(df['Thời gian'].astype(str).str.replace('-', ' ', n=2).str.replace('-', ':'), errors='coerce', utc=True).dt.tz_localize(None)
         df = df.dropna(subset=['Thời gian']).sort_values('Thời gian')
@@ -72,36 +71,19 @@ def process_data(file):
     for col in ['temp', 'humi']:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col].astype(str).str.extract(r'(\d+\.?\d*)')[0], errors='coerce')
-            
             if col == 'temp':
                 df.loc[df[col] > 150, col] = df[col] / 10 
                 df.loc[(df[col] >= 45) & (df[col] <= 120), col] = (df[col] - 32) * 5/9 
-    
+                df.loc[(df[col] < 5) | (df[col] > 55), col] = np.nan 
+            if col == 'humi':
+                df.loc[(df[col] < 20) | (df[col] > 100), col] = np.nan 
     df = df.dropna(subset=['temp', 'humi']).copy()
-    
-    # 1. BỘ LỌC TRUNG VỊ ĐỂ CHỐNG GAI NHIỄU (như đã hứa)
-    if len(df) > 11:
-        df['temp'] = df['temp'].rolling(window=11, center=True, min_periods=1).median()
-        df['humi'] = df['humi'].rolling(window=11, center=True, min_periods=1).median()
-        
-    if not df.empty: 
-        df['VPD'] = df.apply(lambda r: calculate_vpd(r['temp'], r['humi']), axis=1)
-        
-        # --- 2. CẮT ĐỨT ĐƯỜNG VẼ NẾU MẤT KẾT NỐI > 1 PHÚT ---
-        # Tìm những chỗ thời gian bị hổng
-        time_diffs = df['Thời gian'].diff()
-        gap_indices = df[time_diffs > pd.Timedelta(minutes=1)].index
-        
-        # Nhét giá trị rỗng (NaN) vào chỗ hổng để Plotly tự động ngắt nét vẽ
-        if len(gap_indices) > 0:
-            nan_rows = pd.DataFrame([{'Thời gian': df.loc[i, 'Thời gian'] - pd.Timedelta(seconds=1)} for i in gap_indices])
-            df = pd.concat([df, nan_rows]).sort_values('Thời gian').reset_index(drop=True)
-
+    if not df.empty: df['VPD'] = df.apply(lambda r: calculate_vpd(r['temp'], r['humi']), axis=1)
     return df
 
-# --- THANH BÊN (SIDEBAR) ---
+# --- SIDEBAR: CẤU HÌNH & BỘ LỌC ---
 with st.sidebar:
-    st.header("⚙️ Cấu hình")
+    st.header("📧 Cấu hình Gmail")
     u_mail = st.text_input("Gmail gửi:")
     u_pass = st.text_input("Mật khẩu ứng dụng:", type="password")
     t_mail = st.text_input("Gmail nhận:")
@@ -113,7 +95,8 @@ if uploaded_file:
     if not df.empty:
         st.sidebar.header("🔍 Lọc dữ liệu")
         df['Tháng'] = df['Thời gian'].dt.strftime('%m/%Y')
-        filter_mode = st.sidebar.radio("Chế độ lọc:", ["Tất cả", "Tháng", "Khoảng ngày"])
+        
+        filter_mode = st.sidebar.radio("Chế độ lọc thời gian:", ["Tất cả", "Tháng", "Khoảng ngày"])
         
         if filter_mode == "Tháng":
             sel_m = st.sidebar.multiselect("Chọn tháng:", df['Tháng'].unique(), default=df['Tháng'].unique()[-1:])
@@ -126,69 +109,62 @@ if uploaded_file:
         else:
             df_work = df.copy()
 
-        stage = st.sidebar.radio("Giai đoạn:", ["🌱 Cây con", "🌿 Sinh trưởng", "🍅 Ra hoa"], index=1)
+        st.sidebar.divider()
+        growth_stage = st.sidebar.radio("Giai đoạn cây:", ["🌱 Cây con", "🌿 Sinh trưởng", "🍅 Ra hoa"], index=1)
         stt_list = ["Tất cả"] + sorted(df_work['STT'].unique().tolist())
-        sel_stt = st.sidebar.selectbox("📍 Chọn Trạm:", stt_list)
+        sel_stt = st.sidebar.selectbox("📍 Chọn Trạm (STT):", stt_list)
         if sel_stt != "Tất cả": df_work = df_work[df_work['STT'] == sel_stt]
 
-        # --- HIỂN THỊ CHỈ SỐ ---
-        # Bỏ qua các dòng NaN vừa tạo để tính toán số liệu cuối cùng
-        df_valid_for_calc = df_work.dropna(subset=['VPD'])
-        
-        if not df_valid_for_calc.empty:
-            last = df_valid_for_calc.iloc[-1]
-            status, advice, color = get_greenhouse_advice(last['VPD'], stage)
+        # --- HIỂN THỊ DỮ LIỆU ---
+        df_valid = df_work.dropna(subset=['VPD'])
+        if not df_valid.empty:
+            last = df_valid.iloc[-1]
+            status, advice, color = get_greenhouse_advice(last['VPD'], growth_stage)
             
-            st.subheader("📍 Trạng thái hiện tại")
+            st.subheader("📍 Trạng thái trạm đo")
             m1, m2, m3 = st.columns([1, 1.2, 1.8])
             m1.metric("Nhiệt độ", f"{round(last['temp'], 1)} °C")
             m1.metric("Độ ẩm", f"{round(last['humi'], 1)} %")
             
-            st.markdown(f'''
-                <div style="background-color:{color}; padding:20px; border-radius:15px; color:white; text-align:center;">
-                    <h2 style="margin:0;">VPD: {last["VPD"]} kPa</h2>
-                    <b style="font-size:1.2em;">{status}</b>
-                </div>
-            ''', unsafe_allow_html=True)
-            
-            st.info(f"**Chỉ đạo chuyên gia:** {advice}")
+            html_box = f'<div style="background-color:{color}; padding:15px; border-radius:10px; color:white; text-align:center;"><h3 style="margin:0;">VPD: {last["VPD"]} kPa</h3><b>{status}</b></div>'
+            m2.markdown(html_box, unsafe_allow_html=True)
+            m3.warning(f"**Chỉ đạo:** {advice}")
 
-            if st.button("📧 Gửi Email Cảnh Báo Khẩn"):
-                if send_email_alert(u_mail, u_pass, t_mail, last['VPD'], status, last['temp'], last['humi']):
-                    st.success("✅ Đã gửi!")
-                else: st.error("❌ Lỗi cấu hình Gmail!")
+            if "🔴" in status:
+                if st.button("📧 Gửi Email Cảnh Báo Khẩn"):
+                    if send_email_alert(u_mail, u_pass, t_mail, last['VPD'], status, last['temp'], last['humi']):
+                        st.success("✅ Đã gửi báo cáo chi tiết!")
+                    else: st.error("❌ Kiểm tra cấu hình Gmail!")
 
-            # --- BIỂU ĐỒ TỰ ĐỘNG NGẮT KẾT NỐI (Giữ nguyên connectgaps=False mặc định) ---
-            st.subheader("📊 Biểu đồ diễn biến")
+            # BIỂU ĐỒ
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1)
-            fig.add_trace(go.Scatter(x=df_work['Thời gian'], y=df_work['VPD'], name="VPD (kPa)", line=dict(color='green', width=3, shape='spline')), row=1, col=1)
-            fig.add_trace(go.Scatter(x=df_work['Thời gian'], y=df_work['temp'], name="Nhiệt độ (°C)", line=dict(shape='spline')), row=2, col=1)
-            fig.add_trace(go.Scatter(x=df_work['Thời gian'], y=df_work['humi'], name="Độ ẩm (%)", line=dict(shape='spline')), row=2, col=1)
-            fig.update_layout(height=500, margin=dict(l=20, r=20, t=20, b=20), hovermode='x unified')
-            fig.update_yaxes(range=[0, 3], row=1, col=1)
+            fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['VPD'], name="VPD (kPa)", line=dict(color='green')), row=1, col=1)
+            fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['temp'], name="Nhiệt độ (°C)"), row=2, col=1)
+            fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['humi'], name="Độ ẩm (%)"), row=2, col=1)
             st.plotly_chart(fig, use_container_width=True)
 
             # THỐNG KÊ
-            st.subheader("📋 Thống kê chỉ số")
-            st.table(df_valid_for_calc[['temp', 'humi', 'VPD']].agg(['max', 'min', 'mean']).round(2))
+            st.subheader("📋 Thống kê chi tiết")
+            st.table(df_valid[['temp', 'humi', 'VPD']].agg(['max', 'min', 'mean']).round(2))
             
-            # BẢNG DỮ LIỆU CHI TIẾT
+            # --- PHẦN NHUỘM MÀU BẢNG DỮ LIỆU ---
             def highlight_alert(row):
-                if pd.isna(row['VPD']): return [''] * len(row)
-                if "Cây con" in stage: i_min, i_max = 0.4, 0.8
-                elif "Sinh trưởng" in stage: i_min, i_max = 0.8, 1.2
+                # Lấy ngưỡng dựa trên giai đoạn cây
+                if "Cây con" in growth_stage: i_min, i_max = 0.4, 0.8
+                elif "Sinh trưởng" in growth_stage: i_min, i_max = 0.8, 1.2
                 else: i_min, i_max = 1.2, 1.5
+                
+                # Nếu VPD nằm ngoài ngưỡng an toàn (có trừ hao nhẹ như hàm advice)
                 if row['VPD'] < (i_min - 0.2) or row['VPD'] > (i_max + 0.3):
                     return ['background-color: #FFC7CE; color: #9C0006; font-weight: bold'] * len(row)
                 return [''] * len(row)
 
-            st.dataframe(
-                df_valid_for_calc[['Thời gian', 'STT', 'temp', 'humi', 'VPD']]
-                .sort_values('Thời gian', ascending=False)
-                .style.apply(highlight_alert, axis=1),
-                use_container_width=True
-            )
+            # Áp dụng style vào dataframe
+            styled_df = df_valid[['Thời gian', 'STT', 'temp', 'humi', 'VPD']].sort_values('Thời gian', ascending=False).style.apply(highlight_alert, axis=1)
+            
+            st.dataframe(styled_df, use_container_width=True)
+            
         else:
-            st.error("🚨 Không có dữ liệu hợp lệ trong khoảng thời gian đã chọn.")
+            st.error("🚨 Không tìm thấy dữ liệu trong khoảng thời gian/trạm đã chọn.")
 else:
-    st.info("👈 Hãy tải file JSON để bắt đầu.")
+    st.info("👈 Hãy nhập Gmail và tải file JSON ở thanh bên trái.") 
