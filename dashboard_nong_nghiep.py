@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+import time
 
 # --- CẤU HÌNH TRANG ---
 st.set_page_config(page_title="Greenhouse Pro Max", layout="wide")
@@ -91,7 +92,7 @@ def get_greenhouse_advice(vpd, crop):
         return "🟡 CẢNH BÁO",  c["note_warn"], "#FFA500"
     return "🔴 QUÁ CAO",       c["note_high"], "#FF4B4B"
 
-# --- XỬ LÝ DỮ LIỆU & KHỬ NHIỄU ---
+# --- XỬ LÝ DỮ LIỆU & KHỬ NHIỄU (GIỮ NGUYÊN CODE CỦA ÔNG) ---
 def process_data(file):
     try:
         df = pd.read_json(file)
@@ -222,7 +223,10 @@ with st.sidebar:
     t_mail = st.text_input("Gmail nhận:")
     st.divider()
 
-    st.header("⚙️ Cài đặt")
+    st.header("⚙️ Chế độ")
+    mode = st.radio("Chọn nguồn dữ liệu:", ["📂 Xem file JSON", "🎲 Mô phỏng Realtime"])
+    st.divider()
+
     crop_names = list(CROP_VPD.keys())
     selected_crop = st.selectbox("🌱 Loại cây:", crop_names, index=0)
     c_info = CROP_VPD[selected_crop]
@@ -231,56 +235,122 @@ with st.sidebar:
         f"Cảnh báo: > {c_info['warn_max']} kPa"
     )
     st.divider()
-    uploaded_file = st.file_uploader("Tải file JSON", type=['json'])
-
-# =========================================================
-# --- NỘI DUNG CHÍNH ---
-# =========================================================
-if uploaded_file:
-    df = process_data(uploaded_file)
-    if not df.empty:
-        df['Tháng'] = df['Thời gian'].dt.strftime('%m/%Y')
-        with st.sidebar:
-            filter_mode = st.radio("Lọc:", ["Tất cả", "Tháng", "Khoảng ngày"])
-            if filter_mode == "Tháng":
-                sel_m = st.multiselect("Tháng:", df['Tháng'].unique(), default=df['Tháng'].unique()[-1:])
-                df_work = df[df['Tháng'].isin(sel_m)].copy()
-            elif filter_mode == "Khoảng ngày":
-                c1, c2 = st.columns(2)
-                start = pd.to_datetime(c1.date_input("Từ ngày", df['Thời gian'].min()))
-                end   = pd.to_datetime(c2.date_input("Đến ngày", df['Thời gian'].max())) + timedelta(days=1)
-                df_work = df[(df['Thời gian'] >= start) & (df['Thời gian'] < end)].copy()
-            else:
-                df_work = df.copy()
-            
-            stt_list = ["Tất cả"] + sorted(df_work['STT'].unique().tolist())
-            sel_stt  = st.selectbox("📍 Chọn Trạm:", stt_list)
-            if sel_stt != "Tất cả":
-                df_work = df_work[df_work['STT'] == sel_stt]
-
-        df_valid = df_work.dropna(subset=['VPD'])
-        if not df_valid.empty:
-            last = df_valid.iloc[-1]
-            status, advice, color = get_greenhouse_advice(last['VPD'], selected_crop)
-            show_metrics(last, status, advice, color, u_mail, u_pass, t_mail, selected_crop, key_suffix="file")
-            st.plotly_chart(draw_chart(df_valid, c_info, smooth=True), use_container_width=True)
-
-            st.subheader("📋 Thống kê")
-            st.table(df_valid[['temp', 'humi', 'VPD']].agg(['max', 'min', 'mean']).round(2))
-
-            def highlight_alert(row):
-                if row['VPD'] > c_info['warn_max']:      return ['background-color: #FFC7CE'] * len(row)
-                if row['VPD'] > c_info['ideal_max']:     return ['background-color: #FFE0B2'] * len(row)
-                if row['VPD'] < c_info['low']:           return ['background-color: #D6EAF8'] * len(row)
-                return [''] * len(row)
-
-            styled_df = (df_valid[['Thời gian', 'STT', 'temp', 'humi', 'VPD']]
-                         .sort_values('Thời gian', ascending=False)
-                         .style.apply(highlight_alert, axis=1))
-            st.dataframe(styled_df, use_container_width=True)
-        else:
-            st.error("🚨 Không có dữ liệu hợp lệ.")
+    
+    if mode == "📂 Xem file JSON":
+        uploaded_file = st.file_uploader("Tải file JSON", type=['json'])
     else:
-        st.error("🚨 Không đọc được file JSON.")
+        run_realtime = st.toggle("▶️ Bật Mô phỏng", value=True)
+        st.info("Dữ liệu sẽ tự động sinh mới mỗi 60 giây.")
+
+# =========================================================
+# --- XỬ LÝ CHẾ ĐỘ FILE JSON (GIỮ NGUYÊN GỐC) ---
+# =========================================================
+if mode == "📂 Xem file JSON":
+    if uploaded_file:
+        df = process_data(uploaded_file)
+        if not df.empty:
+            df['Tháng'] = df['Thời gian'].dt.strftime('%m/%Y')
+            with st.sidebar:
+                filter_mode = st.radio("Lọc:", ["Tất cả", "Tháng", "Khoảng ngày"])
+                if filter_mode == "Tháng":
+                    sel_m = st.multiselect("Tháng:", df['Tháng'].unique(), default=df['Tháng'].unique()[-1:])
+                    df_work = df[df['Tháng'].isin(sel_m)].copy()
+                elif filter_mode == "Khoảng ngày":
+                    c1, c2 = st.columns(2)
+                    start = pd.to_datetime(c1.date_input("Từ ngày", df['Thời gian'].min()))
+                    end   = pd.to_datetime(c2.date_input("Đến ngày", df['Thời gian'].max())) + timedelta(days=1)
+                    df_work = df[(df['Thời gian'] >= start) & (df['Thời gian'] < end)].copy()
+                else:
+                    df_work = df.copy()
+                
+                stt_list = ["Tất cả"] + sorted(df_work['STT'].unique().tolist())
+                sel_stt  = st.selectbox("📍 Chọn Trạm:", stt_list)
+                if sel_stt != "Tất cả":
+                    df_work = df_work[df_work['STT'] == sel_stt]
+
+            df_valid = df_work.dropna(subset=['VPD'])
+            if not df_valid.empty:
+                last = df_valid.iloc[-1]
+                status, advice, color = get_greenhouse_advice(last['VPD'], selected_crop)
+                show_metrics(last, status, advice, color, u_mail, u_pass, t_mail, selected_crop, key_suffix="file")
+                st.plotly_chart(draw_chart(df_valid, c_info, smooth=True), use_container_width=True)
+
+                st.subheader("📋 Thống kê")
+                st.table(df_valid[['temp', 'humi', 'VPD']].agg(['max', 'min', 'mean']).round(2))
+
+                def highlight_alert(row):
+                    if row['VPD'] > c_info['warn_max']:      return ['background-color: #FFC7CE'] * len(row)
+                    if row['VPD'] > c_info['ideal_max']:     return ['background-color: #FFE0B2'] * len(row)
+                    if row['VPD'] < c_info['low']:           return ['background-color: #D6EAF8'] * len(row)
+                    return [''] * len(row)
+
+                styled_df = (df_valid[['Thời gian', 'STT', 'temp', 'humi', 'VPD']]
+                             .sort_values('Thời gian', ascending=False)
+                             .style.apply(highlight_alert, axis=1))
+                st.dataframe(styled_df, use_container_width=True)
+            else:
+                st.error("🚨 Không có dữ liệu hợp lệ.")
+        else:
+            st.error("🚨 Không đọc được file JSON.")
+    else:
+        st.info("👈 Tải file JSON để xem.")
+
+# =========================================================
+# --- XỬ LÝ CHẾ ĐỘ REALTIME (MỚI) ---
+# =========================================================
 else:
-    st.info("👈 Tải file JSON để xem.")
+    # Khởi tạo bộ nhớ cho realtime nếu chưa có
+    if 'rt_history' not in st.session_state:
+        st.session_state.rt_history = pd.DataFrame(columns=['Thời gian', 'temp', 'humi', 'VPD'])
+    
+    # Placeholder để cập nhật UI không bị giật
+    metric_ph = st.empty()
+    chart_ph = st.empty()
+    table_ph = st.empty()
+    timer_ph = st.empty()
+
+    while run_realtime:
+        # Sinh dữ liệu ngẫu nhiên có logic (quanh giá trị cũ)
+        if st.session_state.rt_history.empty:
+            new_temp = round(np.random.uniform(25, 32), 1)
+            new_humi = round(np.random.uniform(60, 80), 1)
+        else:
+            last_t = st.session_state.rt_history.iloc[-1]['temp']
+            last_h = st.session_state.rt_history.iloc[-1]['humi']
+            new_temp = round(np.clip(last_t + np.random.uniform(-0.5, 0.5), 15, 45), 1)
+            new_humi = round(np.clip(last_h + np.random.uniform(-2, 2), 20, 95), 1)
+        
+        new_vpd = calculate_vpd(new_temp, new_humi)
+        new_row = pd.DataFrame([{
+            'Thời gian': datetime.now().replace(microsecond=0),
+            'temp': new_temp,
+            'humi': new_humi,
+            'VPD': new_vpd,
+            'STT': 'SIM-01'
+        }])
+        
+        # Lưu vào lịch sử (giữ tối đa 100 điểm để nhẹ máy)
+        st.session_state.rt_history = pd.concat([st.session_state.rt_history, new_row], ignore_index=True).tail(100)
+        
+        # Cập nhật Metrics
+        last = st.session_state.rt_history.iloc[-1]
+        status, advice, color = get_greenhouse_advice(last['VPD'], selected_crop)
+        with metric_ph.container():
+            show_metrics(last, status, advice, color, u_mail, u_pass, t_mail, selected_crop, key_suffix="rt")
+        
+        # Cập nhật Biểu đồ (không dùng smooth vì dữ liệu ít)
+        with chart_ph.container():
+            st.plotly_chart(draw_chart(st.session_state.rt_history, c_info, smooth=False), use_container_width=True)
+            
+        # Cập nhật Bảng
+        with table_ph.container():
+            st.subheader("📋 Nhật ký mô phỏng")
+            st.dataframe(st.session_state.rt_history.iloc[::-1], use_container_width=True)
+            
+        # Đếm ngược 60 giây
+        for i in range(60, 0, -1):
+            timer_ph.caption(f"🔄 Đang đợi dữ liệu mới... cập nhật sau {i} giây.")
+            time.sleep(1)
+            # Kiểm tra nếu người dùng tắt toggle trong khi đang sleep
+            if not run_realtime:
+                break
