@@ -240,8 +240,12 @@ with st.sidebar:
     if mode == "📂 Xem file JSON":
         uploaded_file = st.file_uploader("Tải file JSON", type=['json'])
     else:
-        st.info("📡 Nhập URL API trả về JSON từ thiết bị cảm biến.")
-        api_url = st.text_input("URL API:", placeholder="http://192.168.x.x/data")
+        rt_source = st.radio("Nguồn dữ liệu:", ["🎲 Mô phỏng", "📡 API thật"], index=0)
+        if rt_source == "📡 API thật":
+            api_url = st.text_input("URL API:", placeholder="http://192.168.x.x/data")
+        else:
+            api_url = ""
+            st.caption("Dữ liệu nhiệt độ & độ ẩm sẽ được sinh ngẫu nhiên có dao động thực tế.")
         rt_running = st.toggle("▶️ Bật Realtime", value=False)
         rt_window  = st.slider("Hiển thị N điểm gần nhất", 20, 200, 60, 10)
 
@@ -386,33 +390,57 @@ else:
             styled = hist[::-1].style.apply(hl, axis=1)
             st.dataframe(styled, use_container_width=True)
 
+    # --- HÀM SINH DỮ LIỆU MÔ PHỎNG ---
+    def simulate_point():
+        """Sinh 1 điểm nhiệt độ & độ ẩm mô phỏng có dao động thực tế."""
+        hist = st.session_state.rt_history
+        if hist.empty:
+            # Điểm khởi đầu ngẫu nhiên hợp lý
+            temp = round(np.random.uniform(22, 32), 2)
+            humi = round(np.random.uniform(55, 75), 2)
+        else:
+            last_temp = hist.iloc[-1]['temp']
+            last_humi = hist.iloc[-1]['humi']
+            # Dao động nhỏ quanh giá trị trước (±0.3°C, ±1% humi) + xu hướng ngẫu nhiên nhẹ
+            temp = round(np.clip(last_temp + np.random.normal(0, 0.3), 10, 45), 2)
+            humi = round(np.clip(last_humi + np.random.normal(0, 1.0), 20, 95), 2)
+        vpd = calculate_vpd(temp, humi)
+        now = datetime.now().replace(microsecond=0)
+        new_row = pd.DataFrame([{'Thời gian': now, 'temp': temp, 'humi': humi, 'VPD': vpd}])
+        st.session_state.rt_history = pd.concat(
+            [st.session_state.rt_history, new_row], ignore_index=True
+        )
+
     # --- CHẠY REALTIME LOOP ---
     if not rt_running:
         st.info("⏸️ Bật toggle **▶️ Bật Realtime** ở sidebar để bắt đầu.")
         if not st.session_state.rt_history.empty:
             render_realtime(rt_window)
     else:
-        if not api_url:
+        use_sim = (rt_source == "🎲 Mô phỏng")
+        if not use_sim and not api_url:
             st.warning("⚠️ Nhập URL API trước khi bật Realtime.")
         else:
-            status_bar.success(f"🟢 Đang chạy Realtime — cập nhật mỗi {REALTIME_INTERVAL}s")
+            src_label = "🎲 Mô phỏng" if use_sim else f"📡 {api_url}"
+            status_bar.success(f"🟢 Realtime ({src_label}) — cập nhật mỗi {REALTIME_INTERVAL}s")
 
             while rt_running:
                 now_ts = time.time()
                 elapsed = now_ts - st.session_state.rt_last_fetch
 
                 if elapsed >= REALTIME_INTERVAL or st.session_state.rt_last_fetch == 0:
-                    ok, err = fetch_and_append(api_url)
-                    st.session_state.rt_last_fetch = time.time()
-                    if ok:
+                    if use_sim:
+                        simulate_point()
                         st.session_state.rt_error = ""
                     else:
-                        st.session_state.rt_error = err
+                        ok, err = fetch_and_append(api_url)
+                        st.session_state.rt_error = "" if ok else err
+                    st.session_state.rt_last_fetch = time.time()
 
                 if st.session_state.rt_error:
                     status_bar.error(f"❌ Lỗi fetch: {st.session_state.rt_error}")
                 else:
-                    status_bar.success(f"🟢 Realtime — cập nhật mỗi {REALTIME_INTERVAL}s")
+                    status_bar.success(f"🟢 Realtime ({src_label}) — cập nhật mỗi {REALTIME_INTERVAL}s")
 
                 render_realtime(rt_window)
 
