@@ -14,14 +14,14 @@ st.title("🌿 Hệ Thống Giám Sát Nhà Kính (Bản Full Đầy Đủ)")
 
 # --- HÀM GỬI EMAIL ---
 def send_email_alert(sender_mail, app_password, receiver_mail, vpd, status, temp, humi):
-    if vpd > 1.5:
+    if vpd > 1.2:
         ly_do, tinh_trang = "Nóng và khô quá mức.", "Cây cháy lá, héo rũ."
         cach_xu_ly = "Bật phun sương, kéo rèm che nắng ngay."
-    elif vpd < 0.4:
+    elif vpd < 0.8:
         ly_do, tinh_trang = "Độ ẩm quá cao.", "Nguy cơ thối rễ, nấm bệnh."
         cach_xu_ly = "Bật quạt thông gió, ngừng tưới."
     else:
-        ly_do, tinh_trang, cach_xu_ly = "Lệch ngưỡng.", "Cây stress nhẹ.", "Kiểm tra lại thiết bị."
+        ly_do, tinh_trang, cach_xu_ly = "Bình thường.", "Cây ổn định.", "Tiếp tục theo dõi."
 
     try:
         msg = MIMEMultipart()
@@ -45,15 +45,12 @@ def calculate_vpd(temp, humi):
 
 def get_greenhouse_advice(vpd, stage, safe_min, safe_max):
     if pd.isna(vpd): return "N/A", "Chờ dữ liệu...", "#808080"
-    if "Cây con" in stage: i_min, i_max = 0.4, 0.8
-    elif "Sinh trưởng" in stage: i_min, i_max = 0.8, 1.2
-    else: i_min, i_max = 1.2, 1.5
     
-    # --- Đánh giá dựa trên Khoảng an toàn chốt từ thanh Range Slider ---
-    if vpd < safe_min: return "🔴 QUÁ THẤP", "Nguy cơ nấm bệnh!", "#FF4B4B"
-    if i_min <= vpd <= i_max: return "🟢 LÝ TƯỞNG", "Cây phát triển tốt.", "#00C851"
-    if vpd > safe_max: return "🔴 QUÁ CAO", "Stress nhiệt nặng!", "#8B0000"
-    return "🟡 HƠI LỆCH", "Cần điều chỉnh nhẹ.", "#FFA500"
+    # --- Logic màu sắc mới theo yêu cầu ---
+    if vpd < 0.8: return "🔵 QUÁ THẤP", "Độ ẩm cao, nguy cơ nấm bệnh!", "#1E90FF"
+    if 0.8 <= vpd <= 1.2: return "🟢 LÝ TƯỞNG", "Cây phát triển cực tốt.", "#00C851"
+    if vpd > 1.2: return "🔴 QUÁ CAO", "Stress nhiệt, cây thoát hơi nước mạnh!", "#FF4B4B"
+    return "🟡 CẢNH BÁO", "Kiểm tra lại môi trường.", "#FFA500"
 
 # --- XỬ LÝ DỮ LIỆU ---
 def process_data(file):
@@ -127,9 +124,9 @@ if uploaded_file:
         st.sidebar.divider()
         
         # Mặc định theo giai đoạn để thanh kéo tự động nảy số chuẩn
-        if "Cây con" in growth_stage: def_val = (0.2, 1.1)
-        elif "Sinh trưởng" in growth_stage: def_val = (0.5, 1.5)
-        else: def_val = (0.9, 1.8)
+        if "Cây con" in growth_stage: def_val = (0.4, 0.8)
+        elif "Sinh trưởng" in growth_stage: def_val = (0.8, 1.2)
+        else: def_val = (1.2, 1.5)
 
         safe_range = st.sidebar.slider(
             "🎚️ Chỉnh khoảng an toàn VPD",
@@ -157,7 +154,7 @@ if uploaded_file:
             m2.markdown(html_box, unsafe_allow_html=True)
             m3.warning(f"**Chỉ đạo:** {advice}")
 
-            if "🔴" in status:
+            if "🔴" in status or "🔵" in status:
                 if st.button("📧 Gửi Email Cảnh Báo Khẩn"):
                     if send_email_alert(u_mail, u_pass, t_mail, last['VPD'], status, last['temp'], last['humi']):
                         st.success("✅ Đã gửi báo cáo chi tiết!")
@@ -176,9 +173,9 @@ if uploaded_file:
             
             # --- PHẦN NHUỘM MÀU BẢNG DỮ LIỆU ---
             def highlight_alert(row):
-                # Báo đỏ nếu văng khỏi dải Range Slider
-                if row['VPD'] < safe_min or row['VPD'] > safe_max:
-                    return ['background-color: #FFC7CE; color: #9C0006; font-weight: bold'] * len(row)
+                # Báo màu bảng theo VPD
+                if row['VPD'] > 1.2: return ['background-color: #FFC7CE; color: #9C0006; font-weight: bold'] * len(row)
+                if row['VPD'] < 0.8: return ['background-color: #D6EAF8; color: #1B4F72; font-weight: bold'] * len(row)
                 return [''] * len(row)
 
             # Áp dụng style vào dataframe
