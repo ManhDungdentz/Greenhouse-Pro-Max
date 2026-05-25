@@ -127,9 +127,15 @@ if uploaded_file:
         st.sidebar.divider()
         
         # Mặc định theo giai đoạn để thanh kéo tự động nảy số chuẩn
-        if "Cây con" in growth_stage: def_val = (0.2, 1.1)
-        elif "Sinh trưởng" in growth_stage: def_val = (0.5, 1.5)
-        else: def_val = (0.9, 1.8)
+        if "Cây con" in growth_stage: 
+            def_val = (0.2, 1.1)
+            i_min, i_max = 0.4, 0.8
+        elif "Sinh trưởng" in growth_stage: 
+            def_val = (0.5, 1.5)
+            i_min, i_max = 0.8, 1.2
+        else: 
+            def_val = (0.9, 1.8)
+            i_min, i_max = 1.2, 1.5
 
         safe_range = st.sidebar.slider(
             "🎚️ Chỉnh khoảng an toàn VPD",
@@ -163,11 +169,34 @@ if uploaded_file:
                         st.success("✅ Đã gửi báo cáo chi tiết!")
                     else: st.error("❌ Kiểm tra cấu hình Gmail!")
 
-            # BIỂU ĐỒ
+            # BIỂU ĐỒ - GIỮ NGUYÊN FORM GỐC CHỈ THÊM TÔ MÀU
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1)
-            fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['VPD'], name="VPD (kPa)", line=dict(color='green')), row=1, col=1)
+            
+            # Giữ nguyên đường xanh gốc của ông
+            fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['VPD'], name="VPD (kPa)", line=dict(color='green', width=2)), row=1, col=1)
+            
+            # --- CHIA VÙNG MÀU NỀN THEO THANH KÉO SLIDER ---
+            # 1. VÙNG XANH (Lý tưởng)
+            fig.add_hrect(y0=i_min, y1=i_max, fillcolor="#00C851", opacity=0.2, layer="below", line_width=0, row=1, col=1)
+            
+            # 2. VÙNG VÀNG (Cảnh báo - Co giãn theo thanh kéo tới sát vùng Xanh)
+            if safe_min < i_min:
+                fig.add_hrect(y0=safe_min, y1=i_min, fillcolor="#FFA500", opacity=0.2, layer="below", line_width=0, row=1, col=1)
+            if safe_max > i_max:
+                fig.add_hrect(y0=i_max, y1=safe_max, fillcolor="#FFA500", opacity=0.2, layer="below", line_width=0, row=1, col=1)
+                
+            # 3. VÙNG ĐỎ (Nguy hiểm - Phủ từ rìa ngoài thanh kéo trở đi)
+            fig.add_hrect(y0=-1, y1=safe_min, fillcolor="#FF4B4B", opacity=0.15, layer="below", line_width=0, row=1, col=1)
+            fig.add_hrect(y0=safe_max, y1=4, fillcolor="#FF4B4B", opacity=0.15, layer="below", line_width=0, row=1, col=1)
+            
+            # Vẽ tiếp trục dưới
             fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['temp'], name="Nhiệt độ (°C)"), row=2, col=1)
             fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['humi'], name="Độ ẩm (%)"), row=2, col=1)
+            
+            # Ép cứng trục Y cho dải màu khỏi giật nhảy, layout giữ form nhỏ gọn
+            fig.update_yaxes(range=[0, 3.5], row=1, col=1)
+            fig.update_layout(hovermode='x unified', margin=dict(l=20, r=20, t=30, b=20))
+            
             st.plotly_chart(fig, use_container_width=True)
 
             # THỐNG KÊ
