@@ -71,24 +71,37 @@ def process_data(file):
         ).dt.tz_localize(None)
         df = df.dropna(subset=['Thời gian']).sort_values('Thời gian')
 
-    t_cols = [c for c in ['Nhiệt Độ', 'tempKK'] if c in df.columns]
-    if t_cols:
-        df['temp'] = df[t_cols].bfill(axis=1).iloc[:, 0]
-    h_cols = [c for c in ['Độ ẩm', 'humiKK'] if c in df.columns]
-    if h_cols:
-        df['humi'] = df[h_cols].bfill(axis=1).iloc[:, 0]
+    # --- XỬ LÝ TỪNG NGUỒN DỮ LIỆU RIÊNG BIỆT ---
+    # STT 5: tempKK (°F) và humiKK (%) — cảm biến không khí, đơn vị Fahrenheit
+    # STT 2, 3: Nhiệt Độ / Độ ẩm — raw x10 (370 = 37.0°C, 394 = 39.4%)
 
-    for col in ['temp', 'humi']:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col].astype(str).str.extract(r'(\d+\.?\d*)')[0], errors='coerce')
+    df['temp'] = np.nan
+    df['humi'] = np.nan
 
-            # Xử lý đơn vị độ F và lọc rác cơ bản
-            if col == 'temp':
-                df.loc[df[col] > 150, col] = df[col] / 10
-                df.loc[(df[col] >= 45) & (df[col] <= 120), col] = (df[col] - 32) * 5 / 9
-                df.loc[(df[col] < 5) | (df[col] > 55), col] = np.nan
-            if col == 'humi':
-                df.loc[(df[col] < 5) | (df[col] > 100), col] = np.nan
+    # Nguồn tempKK/humiKK: đổi °F → °C nếu > 45
+    if 'tempKK' in df.columns:
+        mask = df['tempKK'].notna()
+        val = pd.to_numeric(df.loc[mask, 'tempKK'], errors='coerce')
+        df.loc[mask, 'temp'] = np.where(val > 45, (val - 32) * 5 / 9, val)
+
+    if 'humiKK' in df.columns:
+        mask = df['humiKK'].notna()
+        df.loc[mask, 'humi'] = pd.to_numeric(df.loc[mask, 'humiKK'], errors='coerce')
+
+    # Nguồn Nhiệt Độ / Độ ẩm: raw x10 → chia 10 (chỉ điền chỗ chưa có)
+    if 'Nhiệt Độ' in df.columns:
+        mask = df['Nhiệt Độ'].notna() & df['temp'].isna()
+        val = pd.to_numeric(df.loc[mask, 'Nhiệt Độ'], errors='coerce')
+        df.loc[mask, 'temp'] = val / 10
+
+    if 'Độ ẩm' in df.columns:
+        mask = df['Độ ẩm'].notna() & df['humi'].isna()
+        val = pd.to_numeric(df.loc[mask, 'Độ ẩm'], errors='coerce')
+        df.loc[mask, 'humi'] = val / 10
+
+    # Lọc giá trị ngoài ngưỡng vật lý
+    df.loc[(df['temp'] < 5) | (df['temp'] > 55), 'temp'] = np.nan
+    df.loc[(df['humi'] < 5) | (df['humi'] > 100), 'humi'] = np.nan
 
     # --- LOGIC KHỬ "CỘT ĐÌNH" (NHIỄU NHẢY VỌT) ---
     df = df.dropna(subset=['temp', 'humi']).copy()
