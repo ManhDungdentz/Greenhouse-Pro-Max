@@ -130,14 +130,16 @@ if uploaded_file:
                     if send_email_alert(u_mail, u_pass, t_mail, last['VPD'], status, last['temp'], last['humi']):
                         st.success("✅ Đã gửi báo cáo chi tiết!")
                     else: st.error("❌ Kiểm tra cấu hình Gmail!")
-            # BIỂU ĐỒ CÓ DẢI MÀU NỀN
+            # BIỂU ĐỒ CÓ DẢI MÀU NỀN VÀ ĐƯỜNG VPD XANH LÁ CÂY
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1)
-            fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['VPD'], name="VPD (kPa)", line=dict(color='black', width=2)), row=1, col=1)
-            fig.add_hrect(y0=0, y1=0.8, fillcolor="rgba(30, 144, 255, 0.2)", line_width=0, row=1, col=1) # Blue
-            fig.add_hrect(y0=0.8, y1=1.2, fillcolor="rgba(0, 200, 81, 0.2)", line_width=0, row=1, col=1) # Green
-            fig.add_hrect(y0=1.2, y1=3.0, fillcolor="rgba(255, 75, 75, 0.2)", line_width=0, row=1, col=1) # Red
+            # Trả lại màu xanh lá cây (color='green') cho đường line VPD
+            fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['VPD'], name="VPD (kPa)", line=dict(color='green', width=2.5)), row=1, col=1)
+            fig.add_hrect(y0=0, y1=0.8, fillcolor="rgba(30, 144, 255, 0.2)", line_width=0, row=1, col=1) # Blue zone
+            fig.add_hrect(y0=0.8, y1=1.2, fillcolor="rgba(0, 200, 81, 0.2)", line_width=0, row=1, col=1) # Green zone
+            fig.add_hrect(y0=1.2, y1=3.0, fillcolor="rgba(255, 75, 75, 0.2)", line_width=0, row=1, col=1) # Red zone
             fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['temp'], name="Nhiệt độ (°C)"), row=2, col=1)
             fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['humi'], name="Độ ẩm (%)"), row=2, col=1)
+            fig.update_layout(height=500, margin=dict(l=20, r=20, t=20, b=20), template="plotly_white")
             st.plotly_chart(fig, use_container_width=True)
             st.subheader("📋 Thống kê chi tiết")
             st.table(df_valid[['temp', 'humi', 'VPD']].agg(['max', 'min', 'mean']).round(2))
