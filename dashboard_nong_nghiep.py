@@ -10,7 +10,7 @@ from email.mime.multipart import MIMEMultipart
 
 # --- CẤU HÌNH TRANG ---
 st.set_page_config(page_title="Greenhouse Pro Max", layout="wide")
-st.title("🌿 Hệ Thống Giám Sát Nhà Kính (Bản Fix Lỗi Cột Đình)")
+st.title("🌿 Hệ Thống Giám Sát Nhà Kính (Bản Đầy Đủ & Khử Nhiễu)")
 
 # --- HÀM GỬI EMAIL ---
 def send_email_alert(sender_mail, app_password, receiver_mail, vpd, status, temp, humi):
@@ -37,10 +37,10 @@ def send_email_alert(sender_mail, app_password, receiver_mail, vpd, status, temp
 
 # --- TÍNH VPD ---
 def calculate_vpd(temp, humi):
-    if pd.isna(temp) or pd.isna(humi): return None
+    if pd.isna(temp) or pd.isna(humi) or humi <= 0: return None
     vpsat = 0.61078 * np.exp((17.27 * temp) / (temp + 237.3))
     vpair = vpsat * (humi / 100)
-    return round(vpsat - vpair, 2)
+    return round(max(0, vpsat - vpair), 2)
 
 def get_greenhouse_advice(vpd, stage, safe_min, safe_max):
     if pd.isna(vpd): return "N/A", "Chờ dữ liệu...", "#808080"
@@ -49,7 +49,7 @@ def get_greenhouse_advice(vpd, stage, safe_min, safe_max):
     if vpd > 1.2: return "🔴 QUÁ CAO", "Stress nhiệt nặng!", "#FF4B4B"
     return "🟡 CẢNH BÁO", "Kiểm tra môi trường.", "#FFA500"
 
-# --- XỬ LÝ DỮ LIỆU & KHỬ NHIỄU MẠNH ---
+# --- XỬ LÝ DỮ LIỆU ĐẦY ĐỦ ---
 def process_data(file):
     try:
         df = pd.read_json(file)
@@ -59,6 +59,7 @@ def process_data(file):
         df['Thời gian'] = pd.to_datetime(df['Thời gian'].astype(str).str.replace('-', ' ', n=2).str.replace('-', ':'), errors='coerce', utc=True).dt.tz_localize(None)
         df = df.dropna(subset=['Thời gian']).sort_values('Thời gian')
     
+    # Xử lý gộp cột Nhiệt độ & Độ ẩm
     t_cols = [c for c in ['Nhiệt Độ', 'tempKK'] if c in df.columns]
     if t_cols: df['temp'] = df[t_cols].bfill(axis=1).iloc[:, 0]
     h_cols = [c for c in ['Độ ẩm', 'humiKK'] if c in df.columns]
@@ -68,24 +69,24 @@ def process_data(file):
         if col in df.columns:
             df[col] = pd.to_numeric(df[col].astype(str).str.extract(r'(\d+\.?\d*)')[0], errors='coerce')
             
-            # Xử lý đơn vị độ F và lọc rác cơ bản
+            # Xử lý độ F và lọc rác vật lý
             if col == 'temp':
                 df.loc[df[col] > 150, col] = df[col] / 10 
                 df.loc[(df[col] >= 45) & (df[col] <= 120), col] = (df[col] - 32) * 5/9 
                 df.loc[(df[col] < 5) | (df[col] > 55), col] = np.nan 
             if col == 'humi':
-                df.loc[(df[col] < 5) | (df[col] > 100), col] = np.nan 
-                
-    # --- LOGIC KHỬ "CỘT ĐÌNH" (NHIỄU NHẢY VỌT) ---
+                df.loc[(df[col] < 15) | (df[col] > 100), col] = np.nan 
+
+    # --- KHỬ NHIỄU CỘT ĐÌNH (NHẢY VỌT) ---
     df = df.dropna(subset=['temp', 'humi']).copy()
     if len(df) > 5:
         for c in ['temp', 'humi']:
-            # Tính độ lệch giữa các điểm liên tiếp
+            # Lọc Median để loại bỏ các điểm rác đơn lẻ
+            df[c] = df[c].rolling(window=3, center=True, min_periods=1).median()
+            # Xử lý các đoạn nhảy vọt bất thường
             diff = df[c].diff().abs()
-            # Nếu điểm sau lệch quá 7 đơn vị so với điểm trước -> coi là nhiễu
-            df.loc[diff > 7, c] = np.nan
-            # Dùng interpolate để lấp chỗ trống bị xóa một cách mượt mà
-            df[c] = df[c].interpolate(method='linear').ffill().bfill()
+            df.loc[diff > 6, c] = np.nan
+            df[c] = df[c].interpolate().ffill().bfill()
 
     if not df.empty: 
         df['VPD'] = df.apply(lambda r: calculate_vpd(r['temp'], r['humi']), axis=1)
@@ -115,13 +116,12 @@ if uploaded_file:
             start = pd.to_datetime(c1.date_input("Từ ngày", df['Thời gian'].min()))
             end = pd.to_datetime(c2.date_input("Đến ngày", df['Thời gian'].max())) + timedelta(days=1)
             df_work = df[(df['Thời gian'] >= start) & (df['Thời gian'] < end)].copy()
-        else:
-            df_work = df.copy()
+        else: df_work = df.copy()
 
         st.sidebar.divider()
         growth_stage = st.sidebar.radio("Giai đoạn:", ["🌱 Cây con", "🌿 Sinh trưởng", "🍅 Ra hoa"], index=1)
         stt_list = ["Tất cả"] + sorted(df_work['STT'].unique().tolist())
-        sel_stt = st.sidebar.selectbox("📍 Chọn Trạm:", stt_list)
+        sel_stt = st.sidebar.selectbox("📍 Trạm:", stt_list)
         if sel_stt != "Tất cả": df_work = df_work[df_work['STT'] == sel_stt]
 
         st.sidebar.divider()
@@ -131,7 +131,7 @@ if uploaded_file:
         safe_range = st.sidebar.slider("🎚️ Khoảng an toàn VPD", 0.0, 3.0, def_val, 0.1)
         safe_min, safe_max = safe_range
 
-        # --- HIỂN THỊ ---
+        # --- HIỂN THỊ CHỈ SỐ ---
         df_valid = df_work.dropna(subset=['VPD'])
         if not df_valid.empty:
             last = df_valid.iloc[-1]
@@ -146,33 +146,34 @@ if uploaded_file:
             m2.markdown(html_box, unsafe_allow_html=True)
             m3.warning(f"**Chỉ đạo:** {advice}")
             
-            if "🔴" in status or "🔵" in status:
-                if st.button("📧 Gửi Email"):
-                    if send_email_alert(u_mail, u_pass, t_mail, last['VPD'], status, last['temp'], last['humi']):
-                        st.success("✅ Đã gửi!")
-                    else: st.error("❌ Lỗi Gmail!")
+            if st.button("📧 Gửi Email Cảnh Báo"):
+                if send_email_alert(u_mail, u_pass, t_mail, last['VPD'], status, last['temp'], last['humi']):
+                    st.success("✅ Đã gửi!")
+                else: st.error("❌ Lỗi Gmail!")
 
-            # BIỂU ĐỒ DIỄN BIẾN (Dải màu đậm 0.4)
+            # BIỂU ĐỒ - DẢI MÀU ĐẬM - KHÓA TRỤC Y
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1)
             
-            # Trace VPD
+            # VPD Trace
             fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['VPD'], name="VPD (kPa)", line=dict(color='green', width=3)), row=1, col=1)
             
-            # Dải màu đậm
-            fig.add_hrect(y0=0, y1=0.8, fillcolor="rgba(30, 144, 255, 0.4)", line_width=0, row=1, col=1) 
-            fig.add_hrect(y0=0.8, y1=1.2, fillcolor="rgba(0, 200, 81, 0.4)", line_width=0, row=1, col=1) 
-            fig.add_hrect(y0=1.2, y1=3.0, fillcolor="rgba(255, 75, 75, 0.4)", line_width=0, row=1, col=1) 
+            # Vùng màu cảnh báo (Opacity 0.4)
+            fig.add_hrect(y0=0, y1=0.8, fillcolor="rgba(30, 144, 255, 0.4)", line_width=0, row=1, col=1)
+            fig.add_hrect(y0=0.8, y1=1.2, fillcolor="rgba(0, 200, 81, 0.4)", line_width=0, row=1, col=1)
+            fig.add_hrect(y0=1.2, y1=3.0, fillcolor="rgba(255, 75, 75, 0.4)", line_width=0, row=1, col=1)
             
-            # Trace Temp & Humi
+            # Temp & Humi Trace
             fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['temp'], name="Nhiệt độ (°C)"), row=2, col=1)
             fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['humi'], name="Độ ẩm (%)"), row=2, col=1)
             
-            fig.update_layout(height=550, margin=dict(l=20, r=20, t=20, b=20), template="plotly_white", hovermode='x unified')
+            fig.update_layout(height=600, margin=dict(l=20, r=20, t=20, b=20), template="plotly_white", hovermode='x unified')
+            fig.update_yaxes(range=[0, 2.5], row=1, col=1) # Giữ biểu đồ VPD ổn định
             st.plotly_chart(fig, use_container_width=True)
 
             st.subheader("📋 Thống kê")
             st.table(df_valid[['temp', 'humi', 'VPD']].agg(['max', 'min', 'mean']).round(2))
             
+            # Bảng dữ liệu có màu
             def highlight_alert(row):
                 if row['VPD'] > 1.2: return ['background-color: #FFC7CE'] * len(row)
                 if row['VPD'] < 0.8: return ['background-color: #D6EAF8'] * len(row)
@@ -183,4 +184,4 @@ if uploaded_file:
         else:
             st.error("🚨 Không có dữ liệu.")
 else:
-    st.info("👈 Tải file JSON để xem.")
+    st.info("👈 Tải file JSON vào đây.")
