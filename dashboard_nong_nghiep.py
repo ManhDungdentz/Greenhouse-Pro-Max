@@ -433,18 +433,21 @@ else:
     if 'rt_history' not in st.session_state:
         st.session_state.rt_history  = pd.DataFrame(columns=['Thời gian', 'temp', 'humi', 'VPD', 'STT'])
         st.session_state.rt_running  = False
-        st.session_state.rt_last_gen = None   # Thời điểm sinh dữ liệu gần nhất
+        st.session_state.rt_last_gen = None
+        st.session_state.rt_sim_time = None  # con trỏ thời gian giả lập
 
     def init_seed_data():
-        """Tạo 1 điểm dữ liệu mồi ban đầu."""
+        """Tạo 1 điểm dữ liệu mồi ban đầu, thời gian giả lập bắt đầu từ lúc này."""
         t, h   = 28.0, 75.0
         vpd    = calculate_vpd(t, h)
+        sim_start = datetime.now().replace(second=0, microsecond=0)
         seed   = pd.DataFrame([{
-            'Thời gian': datetime.now().replace(microsecond=0),
+            'Thời gian': sim_start,  # mốc giả lập đầu tiên
             'temp': t, 'humi': h, 'VPD': vpd, 'STT': 'SIM-01'
         }])
-        st.session_state.rt_history  = seed
-        st.session_state.rt_last_gen = datetime.now()
+        st.session_state.rt_history    = seed
+        st.session_state.rt_last_gen   = datetime.now()  # thời điểm thực để đếm interval
+        st.session_state.rt_sim_time   = sim_start       # con trỏ thời gian giả lập
 
     if st.session_state.rt_history.empty:
         init_seed_data()
@@ -458,6 +461,9 @@ else:
             if st.button("▶️ Bật", use_container_width=True):
                 st.session_state.rt_running  = True
                 st.session_state.rt_last_gen = datetime.now()
+                # Nếu chưa có rt_sim_time, lấy từ điểm cuối trong history
+                if st.session_state.rt_sim_time is None and not st.session_state.rt_history.empty:
+                    st.session_state.rt_sim_time = st.session_state.rt_history.iloc[-1]['Thời gian']
                 st.rerun()
         else:
             if st.button("⏸️ Tạm dừng", use_container_width=True):
@@ -489,8 +495,14 @@ else:
             new_temp   = round(np.clip(prev['temp'] + np.random.uniform(-0.8, 0.8), 15, 45), 1)
             new_humi   = round(np.clip(prev['humi'] + np.random.uniform(-3,   3),   20, 95), 1)
             new_vpd    = calculate_vpd(new_temp, new_humi)
+
+            # Thời gian giả lập: điểm trước + 15 phút
+            prev_sim_time = st.session_state.rt_sim_time or prev['Thời gian']
+            new_sim_time  = prev_sim_time + timedelta(minutes=15)
+            st.session_state.rt_sim_time = new_sim_time
+
             new_row    = pd.DataFrame([{
-                'Thời gian': now.replace(microsecond=0),
+                'Thời gian': new_sim_time,   # ← thời gian giả lập, cách nhau đúng 15 phút
                 'temp': new_temp, 'humi': new_humi, 'VPD': new_vpd, 'STT': 'SIM-01'
             }])
             st.session_state.rt_history  = pd.concat(
