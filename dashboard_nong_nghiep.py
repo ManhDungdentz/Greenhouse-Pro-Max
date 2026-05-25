@@ -15,44 +15,6 @@ import time
 st.set_page_config(page_title="Greenhouse Pro Max", layout="wide")
 st.title("🌿 Hệ Thống Giám Sát Nhà Kính")
 
-# --- HÀM GỬI EMAIL ---
-def send_email_alert(sender_mail, app_password, receiver_mail, vpd, status, temp, humi):
-    if vpd > 1.5:
-        ly_do, tinh_trang = "Nóng và khô quá mức.", "Cây cháy lá, héo rũ."
-        cach_xu_ly = "Bật phun sương, kéo rèm che nắng ngay."
-    elif vpd < 0.8:
-        ly_do, tinh_trang = "Độ ẩm quá cao.", "Nguy cơ thối rễ, nấm bệnh."
-        cach_xu_ly = "Bật quạt thông gió, ngừng tưới."
-    else:
-        ly_do, tinh_trang, cach_xu_ly = "Bình thường.", "Cây ổn định.", "Tiếp tục theo dõi."
-    try:
-        msg = MIMEMultipart()
-        msg['Subject'] = f"🚨 CẢNH BÁO VPD: {status}"
-        body = (f"📍 TRẠNG THÁI: {status}\n"
-                f"VPD: {vpd} kPa\n"
-                f"Nhiệt độ: {temp}°C\n"
-                f"Độ ẩm: {humi}%\n\n"
-                f"Lý do: {ly_do}\n"
-                f"Tình trạng: {tinh_trang}\n"
-                f"Xử lý: {cach_xu_ly}")
-        msg.attach(MIMEText(body, 'plain', 'utf-8'))
-        server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls()
-        server.login(sender_mail, app_password)
-        server.sendmail(sender_mail, receiver_mail, msg.as_string())
-        server.quit()
-        return True
-    except:
-        return False
-
-# --- TÍNH VPD ---
-def calculate_vpd(temp, humi):
-    if pd.isna(temp) or pd.isna(humi):
-        return None
-    vpsat = 0.61078 * np.exp((17.27 * temp) / (temp + 237.3))
-    vpair = vpsat * (humi / 100)
-    return round(vpsat - vpair, 2)
-
 # --- NGƯỠNG VPD THEO TỪNG LOẠI CÂY ---
 CROP_VPD = {
     "🌶️ Ớt chuông": {
@@ -85,6 +47,146 @@ CROP_VPD = {
     },
 }
 
+# =========================================================
+# --- HÀM TÍNH VPD ---
+# =========================================================
+def calculate_vpd(temp, humi):
+    if pd.isna(temp) or pd.isna(humi):
+        return None
+    vpsat = 0.61078 * np.exp((17.27 * temp) / (temp + 237.3))
+    vpair = vpsat * (humi / 100)
+    return round(vpsat - vpair, 2)
+
+# =========================================================
+# --- HÀM GỬI EMAIL CHI TIẾT ---
+# =========================================================
+def build_email_body(vpd, status, temp, humi, crop, df_history=None, source="Realtime"):
+    c = CROP_VPD.get(crop, list(CROP_VPD.values())[0])
+    now_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+
+    # Xác định mức độ & hướng xử lý chi tiết
+    if vpd > c["warn_max"]:
+        muc_do     = "🔴 NGUY HIỂM — VPD QUÁ CAO"
+        nguyen_nhan = "Nhiệt độ quá cao hoặc độ ẩm quá thấp khiến cây mất nước nhanh chóng qua lỗ khí khổng."
+        hau_qua    = "Cây bị stress nước nặng, lỗ khí khổng đóng lại → quang hợp giảm → héo, rụng hoa/quả non."
+        xu_ly      = (
+            "1. Bật hệ thống phun sương ngay lập tức.\n"
+            "2. Kéo rèm che nắng / lưới lan để giảm bức xạ nhiệt.\n"
+            "3. Kiểm tra quạt thông gió — đảm bảo lưu thông khí.\n"
+            "4. Tăng tần suất tưới nhỏ giọt (giảm chu kỳ 30–50%).\n"
+            "5. Theo dõi lại sau 30 phút; nếu VPD > {:.1f} kPa liên tục → kiểm tra bơm phun.".format(c["warn_max"])
+        )
+    elif vpd > c["ideal_max"]:
+        muc_do     = "🟡 CẢNH BÁO — VPD HƠI CAO"
+        nguyen_nhan = "Độ ẩm đang giảm dần hoặc nhiệt độ tăng nhẹ so với ngưỡng lý tưởng."
+        hau_qua    = "Cây bắt đầu căng thẳng nhẹ, năng suất và chất lượng hoa quả có thể bị ảnh hưởng."
+        xu_ly      = (
+            "1. Tăng nhẹ phun sương (tăng tần suất 15–20%).\n"
+            "2. Kiểm tra rèm che — cân nhắc che bổ sung vào giờ cao điểm nắng.\n"
+            "3. Theo dõi xu hướng: nếu VPD tiếp tục tăng, bật phun sương liên tục."
+        )
+    elif vpd < c["low"]:
+        muc_do     = "🔵 NGUY HIỂM — VPD QUÁ THẤP"
+        nguyen_nhan = "Độ ẩm không khí quá cao, cây không thoát được hơi nước qua lỗ khí khổng."
+        hau_qua    = "Nguy cơ nấm bệnh (thối xám, phấn trắng, mốc), rễ yếu, lá vàng úa và thối nhũn."
+        xu_ly      = (
+            "1. Bật quạt thông gió ngay — tăng tốc độ tối đa.\n"
+            "2. Ngừng toàn bộ hệ thống tưới phun.\n"
+            "3. Mở cửa thông gió (nếu có) để trao đổi khí với bên ngoài.\n"
+            "4. Kiểm tra hệ thống thoát nước — tránh đọng nước trên lá.\n"
+            "5. Cân nhắc phun thuốc phòng nấm nếu tình trạng kéo dài > 2 giờ."
+        )
+    elif vpd < c["ideal_min"]:
+        muc_do     = "🟡 CẢNH BÁO — VPD HƠI THẤP"
+        nguyen_nhan = "Độ ẩm đang ở mức hơi cao, tiếp cận ngưỡng nguy hiểm."
+        hau_qua    = "Thoát hơi nước của cây kém, môi trường thuận lợi cho nấm bệnh phát triển."
+        xu_ly      = (
+            "1. Tăng tốc độ quạt thông gió 20–30%.\n"
+            "2. Giảm lượng tưới trong chu kỳ tiếp theo.\n"
+            "3. Theo dõi sát — nếu VPD tiếp tục giảm, ngừng tưới hoàn toàn."
+        )
+    else:
+        muc_do     = "🟢 BÌNH THƯỜNG"
+        nguyen_nhan = "Điều kiện môi trường đang trong ngưỡng lý tưởng cho loại cây này."
+        hau_qua    = "Cây phát triển tốt, trao đổi chất hiệu quả."
+        xu_ly      = "Tiếp tục duy trì điều kiện hiện tại. Theo dõi định kỳ."
+
+    # Thống kê ngắn từ lịch sử (nếu có)
+    stats_block = ""
+    if df_history is not None and len(df_history) >= 3:
+        recent = df_history.tail(12)  # ~3 giờ gần nhất (12 × 15 phút)
+        stats_block = (
+            f"\n📊 THỐNG KÊ 3 GIỜ GẦN NHẤT ({len(recent)} điểm đo):\n"
+            f"   Nhiệt độ : Min {recent['temp'].min():.1f}°C  |  Max {recent['temp'].max():.1f}°C  |  TB {recent['temp'].mean():.1f}°C\n"
+            f"   Độ ẩm    : Min {recent['humi'].min():.1f}%   |  Max {recent['humi'].max():.1f}%   |  TB {recent['humi'].mean():.1f}%\n"
+            f"   VPD      : Min {recent['VPD'].min():.2f} kPa |  Max {recent['VPD'].max():.2f} kPa |  TB {recent['VPD'].mean():.2f} kPa\n"
+        )
+
+    ngưỡng_block = (
+        f"\n📐 NGƯỠNG VPD CÀI ĐẶT ({crop}):\n"
+        f"   Quá thấp   : < {c['low']} kPa\n"
+        f"   Cảnh báo   : {c['low']} – {c['ideal_min']} kPa\n"
+        f"   Lý tưởng   : {c['ideal_min']} – {c['ideal_max']} kPa\n"
+        f"   Cảnh báo   : {c['ideal_max']} – {c['warn_max']} kPa\n"
+        f"   Quá cao    : > {c['warn_max']} kPa\n"
+    )
+
+    body = f"""
+╔══════════════════════════════════════════════╗
+   HỆ THỐNG GIÁM SÁT NHÀ KÍNH — CẢNH BÁO VPD
+╚══════════════════════════════════════════════╝
+
+🕐 Thời gian    : {now_str}
+📡 Nguồn        : {source}
+🌱 Loại cây     : {crop}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📍 THÔNG SỐ HIỆN TẠI
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   Nhiệt độ  : {temp:.1f} °C
+   Độ ẩm     : {humi:.1f} %
+   VPD       : {vpd:.2f} kPa
+
+⚠️  MỨC ĐỘ    : {muc_do}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔍 PHÂN TÍCH
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Nguyên nhân  : {nguyen_nhan}
+Hậu quả      : {hau_qua}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🛠️  HƯỚNG XỬ LÝ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{xu_ly}
+{stats_block}{ngưỡng_block}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Email tự động từ Hệ thống Giám sát Nhà Kính
+Vui lòng không trả lời email này.
+"""
+    return body
+
+def send_email_alert(sender_mail, app_password, receiver_mail, vpd, status,
+                     temp, humi, crop, df_history=None, source="Realtime"):
+    try:
+        body = build_email_body(vpd, status, temp, humi, crop, df_history, source)
+        msg = MIMEMultipart()
+        msg['From']    = sender_mail
+        msg['To']      = receiver_mail
+        msg['Subject'] = f"🚨 [{source}] Cảnh báo VPD {status} — {vpd:.2f} kPa | {crop}"
+        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(sender_mail, app_password)
+        server.sendmail(sender_mail, receiver_mail, msg.as_string())
+        server.quit()
+        return True
+    except Exception as e:
+        return False
+
+# =========================================================
+# --- HÀM ĐÁNH GIÁ VPD ---
+# =========================================================
 def get_greenhouse_advice(vpd, crop):
     if pd.isna(vpd):
         return "N/A", "Chờ dữ liệu...", "#808080"
@@ -100,7 +202,9 @@ def get_greenhouse_advice(vpd, crop):
         return "🟡 CẢNH BÁO",  c["note_warn"], "#FFA500"
     return "🔴 QUÁ CAO",       c["note_high"], "#FF4B4B"
 
-# --- XỬ LÝ DỮ LIỆU & KHỬ NHIỄU ---
+# =========================================================
+# --- XỬ LÝ FILE JSON ---
+# =========================================================
 def process_data(file):
     try:
         df = pd.read_json(file)
@@ -117,44 +221,31 @@ def process_data(file):
     df['temp'] = np.nan
     df['humi'] = np.nan
 
-    # =====================================================
-    # FIX: tempKK và humiKK bị đấu ngược trên sensor.
-    # - humiKK thực ra chứa giá trị nhiệt độ (~33–50°C)
-    # - tempKK thực ra chứa giá trị độ ẩm (~34–50%)
-    # =====================================================
+    # FIX: humiKK = nhiệt độ thực / tempKK = độ ẩm thực (sensor bị đấu ngược)
     if 'humiKK' in df.columns:
         mask = df['humiKK'].notna()
-        val = pd.to_numeric(df.loc[mask, 'humiKK'], errors='coerce')
-        df.loc[mask, 'temp'] = val  # humiKK = nhiệt độ thực
+        val  = pd.to_numeric(df.loc[mask, 'humiKK'], errors='coerce')
+        df.loc[mask, 'temp'] = val
 
     if 'tempKK' in df.columns:
         mask = df['tempKK'].notna()
-        val = pd.to_numeric(df.loc[mask, 'tempKK'], errors='coerce')
-        df.loc[mask, 'humi'] = val  # tempKK = độ ẩm thực
+        val  = pd.to_numeric(df.loc[mask, 'tempKK'], errors='coerce')
+        df.loc[mask, 'humi'] = val
 
-    # Fallback: đọc từ cột 'Nhiệt Độ' / 'Độ ẩm' (chia 10)
-    if 'Nhiệt Độ' in df.columns:
-        mask = df['Nhiệt Độ'].notna() & df['temp'].isna()
-        val = pd.to_numeric(df.loc[mask, 'Nhiệt Độ'], errors='coerce')
-        df.loc[mask, 'temp'] = val / 10
-
-    if 'Nhiệt độ' in df.columns:  # STT 1 dùng chữ thường 'độ'
-        mask = df['Nhiệt độ'].notna() & df['temp'].isna()
-        val = pd.to_numeric(df.loc[mask, 'Nhiệt độ'], errors='coerce')
-        df.loc[mask, 'temp'] = val / 10
+    # Fallback cột Nhiệt Độ / Độ ẩm (chia 10)
+    for col_name in ['Nhiệt Độ', 'Nhiệt độ']:
+        if col_name in df.columns:
+            mask = df[col_name].notna() & df['temp'].isna()
+            df.loc[mask, 'temp'] = pd.to_numeric(df.loc[mask, col_name], errors='coerce') / 10
 
     if 'Độ ẩm' in df.columns:
         mask = df['Độ ẩm'].notna() & df['humi'].isna()
-        val = pd.to_numeric(df.loc[mask, 'Độ ẩm'], errors='coerce')
-        df.loc[mask, 'humi'] = val / 10
+        df.loc[mask, 'humi'] = pd.to_numeric(df.loc[mask, 'Độ ẩm'], errors='coerce') / 10
 
-    # Loại giá trị ngoài vùng hợp lệ
     df.loc[(df['temp'] < 5)  | (df['temp'] > 55),  'temp'] = np.nan
     df.loc[(df['humi'] < 5)  | (df['humi'] > 100), 'humi'] = np.nan
-
     df = df.dropna(subset=['temp', 'humi']).copy()
 
-    # Khử nhiễu đột biến
     if len(df) > 5:
         for c in ['temp', 'humi']:
             diff = df[c].diff().abs()
@@ -165,13 +256,15 @@ def process_data(file):
         df['VPD'] = df.apply(lambda r: calculate_vpd(r['temp'], r['humi']), axis=1)
     return df
 
+# =========================================================
 # --- HÀM VẼ BIỂU ĐỒ ---
-def draw_chart(df_valid, c_info, smooth=True):
+# =========================================================
+def draw_chart(df_valid, c_info, smooth=True, x_label="Thời gian (mô phỏng ~ 15 phút/điểm)"):
     df_chart = df_valid.copy()
-    x_col = 'Thời gian'
+    x_col    = 'Thời gian'
 
-    if smooth and 'Thời gian' in df_chart.columns and len(df_chart) > 10:
-        df_chart = df_chart.set_index('Thời gian')
+    if smooth and x_col in df_chart.columns and len(df_chart) > 10:
+        df_chart = df_chart.set_index(x_col)
         for col in ['VPD', 'temp', 'humi']:
             if col in df_chart.columns:
                 q1 = df_chart[col].quantile(0.05)
@@ -182,50 +275,80 @@ def draw_chart(df_valid, c_info, smooth=True):
         df_chart['VPD'] = df_chart['VPD'].rolling(3, center=True, min_periods=1).mean()
         df_chart = df_chart.reset_index()
 
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1,
-                        subplot_titles=("VPD (kPa)", "Nhiệt độ & Độ ẩm"))
+    fig = make_subplots(
+        rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1,
+        subplot_titles=("VPD (kPa)", "Nhiệt độ & Độ ẩm")
+    )
 
-    fig.add_trace(go.Scatter(x=df_chart[x_col], y=df_chart['VPD'].round(2),
-                             name="VPD (kPa)", line=dict(color='#2E7D32', width=2.5)), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=df_chart[x_col], y=df_chart['VPD'].round(2),
+        name="VPD (kPa)", line=dict(color='#2E7D32', width=2.5),
+        mode='lines+markers', marker=dict(size=4)
+    ), row=1, col=1)
 
-    # Dải màu phân vùng VPD
-    vpd_max = float(max(df_chart['VPD'].max() * 1.15, 3.5)) if not df_chart.empty else 3.5
+    vpd_max = float(max(df_chart['VPD'].dropna().max() * 1.15, 3.5)) if not df_chart.empty else 3.5
     c_lo, c_imin, c_imax, c_wmax = c_info["low"], c_info["ideal_min"], c_info["ideal_max"], c_info["warn_max"]
 
-    fig.add_hrect(y0=0,       y1=c_lo,    fillcolor="rgba(30, 144, 255, 0.35)", line_width=0, row=1, col=1)
-    fig.add_hrect(y0=c_lo,    y1=c_imin,  fillcolor="rgba(255, 165, 0, 0.35)",  line_width=0, row=1, col=1)
-    fig.add_hrect(y0=c_imin,  y1=c_imax,  fillcolor="rgba(0, 200, 81, 0.35)",   line_width=0, row=1, col=1)
-    fig.add_hrect(y0=c_imax,  y1=c_wmax,  fillcolor="rgba(255, 165, 0, 0.35)",  line_width=0, row=1, col=1)
-    fig.add_hrect(y0=c_wmax,  y1=vpd_max, fillcolor="rgba(255, 75, 75, 0.35)",  line_width=0, row=1, col=1)
+    fig.add_hrect(y0=0,      y1=c_lo,    fillcolor="rgba(30,144,255,0.25)", line_width=0, row=1, col=1)
+    fig.add_hrect(y0=c_lo,   y1=c_imin,  fillcolor="rgba(255,165,0,0.25)",  line_width=0, row=1, col=1)
+    fig.add_hrect(y0=c_imin, y1=c_imax,  fillcolor="rgba(0,200,81,0.30)",   line_width=0, row=1, col=1)
+    fig.add_hrect(y0=c_imax, y1=c_wmax,  fillcolor="rgba(255,165,0,0.25)",  line_width=0, row=1, col=1)
+    fig.add_hrect(y0=c_wmax, y1=vpd_max, fillcolor="rgba(255,75,75,0.30)",  line_width=0, row=1, col=1)
 
-    fig.add_trace(go.Scatter(x=df_chart[x_col], y=df_chart['temp'].round(1),
-                             name="Nhiệt độ (°C)", line=dict(color='#E53935')), row=2, col=1)
-    fig.add_trace(go.Scatter(x=df_chart[x_col], y=df_chart['humi'].round(1),
-                             name="Độ ẩm (%)", line=dict(color='#1E88E5')), row=2, col=1)
+    # Đường ngưỡng lý tưởng
+    for y_val, label, col in [(c_imin, f"Min lý tưởng ({c_imin})", "green"),
+                               (c_imax, f"Max lý tưởng ({c_imax})", "orange")]:
+        fig.add_hline(y=y_val, line_dash="dot", line_color=col,
+                      annotation_text=label, annotation_position="top right", row=1, col=1)
 
-    fig.update_layout(height=520, template="plotly_white", hovermode='x unified',
-                      margin=dict(l=10, r=10, t=30, b=10))
+    fig.add_trace(go.Scatter(
+        x=df_chart[x_col], y=df_chart['temp'].round(1),
+        name="Nhiệt độ (°C)", line=dict(color='#E53935', width=2),
+        mode='lines+markers', marker=dict(size=4)
+    ), row=2, col=1)
+    fig.add_trace(go.Scatter(
+        x=df_chart[x_col], y=df_chart['humi'].round(1),
+        name="Độ ẩm (%)", line=dict(color='#1E88E5', width=2),
+        mode='lines+markers', marker=dict(size=4)
+    ), row=2, col=1)
+
+    fig.update_xaxes(title_text=x_label, row=2, col=1)
+    fig.update_layout(
+        height=540, template="plotly_white", hovermode='x unified',
+        margin=dict(l=10, r=10, t=40, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
     return fig
 
+# =========================================================
 # --- HÀM HIỂN THỊ METRIC CARD ---
-def show_metrics(last, status, advice, color, u_mail, u_pass, t_mail, selected_crop, key_suffix="default"):
+# =========================================================
+def show_metrics(last, status, advice, color, u_mail, u_pass, t_mail,
+                 selected_crop, key_suffix="default", df_history=None, source=""):
     st.subheader("📍 Thông số mới nhất")
     m1, m2, m3 = st.columns([1, 1.2, 1.8])
     m1.metric("Nhiệt độ", f"{round(last['temp'], 1)} °C")
     m1.metric("Độ ẩm",    f"{round(last['humi'], 1)} %")
 
-    html_box = (f'<div style="background-color:{color};padding:15px;border-radius:10px;'
-                f'color:white;text-align:center;">'
-                f'<h3 style="margin:0;">VPD: {last["VPD"]} kPa</h3><b>{status}</b></div>')
+    html_box = (
+        f'<div style="background-color:{color};padding:15px;border-radius:10px;'
+        f'color:white;text-align:center;">'
+        f'<h3 style="margin:0;">VPD: {last["VPD"]} kPa</h3><b>{status}</b></div>'
+    )
     m2.markdown(html_box, unsafe_allow_html=True)
     m3.warning(f"**Chỉ đạo:** {advice}")
 
     if "🔴" in status or "🔵" in status:
         if st.button("📧 Gửi Email cảnh báo", key=f"email_btn_{key_suffix}"):
-            if send_email_alert(u_mail, u_pass, t_mail, last['VPD'], status, last['temp'], last['humi']):
-                st.success("✅ Đã gửi!")
+            ok = send_email_alert(
+                u_mail, u_pass, t_mail,
+                last['VPD'], status, last['temp'], last['humi'],
+                selected_crop, df_history, source
+            )
+            if ok:
+                st.success("✅ Đã gửi email chi tiết!")
             else:
-                st.error("❌ Lỗi cấu hình Gmail!")
+                st.error("❌ Lỗi cấu hình Gmail — kiểm tra lại App Password.")
 
 # =========================================================
 # --- SIDEBAR ---
@@ -246,13 +369,10 @@ with st.sidebar:
 
     if mode == "📂 Xem file JSON":
         uploaded_file = st.file_uploader("Tải file JSON", type=['json'])
-    else:
-        run_realtime = st.toggle("▶️ Bật Mô phỏng", value=True)
 
 # =========================================================
-# --- NỘI DUNG CHÍNH ---
+# --- CHẾ ĐỘ JSON ---
 # =========================================================
-
 if mode == "📂 Xem file JSON":
     if uploaded_file:
         df = process_data(uploaded_file)
@@ -261,12 +381,12 @@ if mode == "📂 Xem file JSON":
             with st.sidebar:
                 filter_mode = st.radio("Lọc theo:", ["Tất cả", "Tháng", "Khoảng ngày"])
                 if filter_mode == "Tháng":
-                    sel_m = st.multiselect("Chọn tháng:", df['Tháng'].unique(), default=df['Tháng'].unique()[-1:])
+                    sel_m   = st.multiselect("Chọn tháng:", df['Tháng'].unique(), default=df['Tháng'].unique()[-1:])
                     df_work = df[df['Tháng'].isin(sel_m)].copy()
                 elif filter_mode == "Khoảng ngày":
-                    c1, c2 = st.columns(2)
-                    start = pd.to_datetime(c1.date_input("Từ ngày", df['Thời gian'].min()))
-                    end   = pd.to_datetime(c2.date_input("Đến ngày", df['Thời gian'].max())) + timedelta(days=1)
+                    c1, c2  = st.columns(2)
+                    start   = pd.to_datetime(c1.date_input("Từ ngày", df['Thời gian'].min()))
+                    end     = pd.to_datetime(c2.date_input("Đến ngày", df['Thời gian'].max())) + timedelta(days=1)
                     df_work = df[(df['Thời gian'] >= start) & (df['Thời gian'] < end)].copy()
                 else:
                     df_work = df.copy()
@@ -277,64 +397,158 @@ if mode == "📂 Xem file JSON":
 
             df_valid = df_work.dropna(subset=['VPD'])
             if not df_valid.empty:
-                last = df_valid.iloc[-1]
+                last                  = df_valid.iloc[-1]
                 status, advice, color = get_greenhouse_advice(last['VPD'], selected_crop)
-                show_metrics(last, status, advice, color, u_mail, u_pass, t_mail, selected_crop, key_suffix="file")
-                st.plotly_chart(draw_chart(df_valid, c_info), use_container_width=True)
+                show_metrics(last, status, advice, color, u_mail, u_pass, t_mail,
+                             selected_crop, key_suffix="file",
+                             df_history=df_valid, source=f"JSON / Trạm {sel_stt}")
+                st.plotly_chart(draw_chart(df_valid, c_info, smooth=True, x_label="Thời gian"),
+                                use_container_width=True)
 
                 st.subheader("📋 Thống kê")
                 st.table(df_valid[['temp', 'humi', 'VPD']].agg(['max', 'min', 'mean']).round(2))
 
                 def highlight_alert(row):
-                    if row['VPD'] > c_info['warn_max']: return ['background-color: #FFC7CE'] * len(row)
-                    if row['VPD'] > c_info['ideal_max']: return ['background-color: #FFE0B2'] * len(row)
-                    if row['VPD'] < c_info['low']: return ['background-color: #D6EAF8'] * len(row)
+                    if row['VPD'] > c_info['warn_max']:  return ['background-color:#FFC7CE'] * len(row)
+                    if row['VPD'] > c_info['ideal_max']: return ['background-color:#FFE0B2'] * len(row)
+                    if row['VPD'] < c_info['low']:       return ['background-color:#D6EAF8'] * len(row)
                     return [''] * len(row)
 
-                styled_df = (df_valid[['Thời gian', 'STT', 'temp', 'humi', 'VPD']]
-                             .sort_values('Thời gian', ascending=False)
-                             .style.apply(highlight_alert, axis=1))
+                styled_df = (
+                    df_valid[['Thời gian', 'STT', 'temp', 'humi', 'VPD']]
+                    .sort_values('Thời gian', ascending=False)
+                    .style.apply(highlight_alert, axis=1)
+                )
                 st.dataframe(styled_df, use_container_width=True)
         else:
-            st.error("🚨 File không hợp lệ.")
+            st.error("🚨 File không hợp lệ hoặc không đọc được dữ liệu.")
     else:
         st.info("👈 Vui lòng tải file JSON ở sidebar.")
 
+# =========================================================
+# --- CHẾ ĐỘ REALTIME ---
+# =========================================================
 else:
-    # --- CHẾ ĐỘ REALTIME ---
+    # --- Khởi tạo session state ---
     if 'rt_history' not in st.session_state:
-        st.session_state.rt_history = pd.DataFrame(columns=['Thời gian', 'temp', 'humi', 'VPD', 'STT'])
-        t, h = 28.0, 75.0
-        vpd = calculate_vpd(t, h)
-        st.session_state.rt_history.loc[0] = [datetime.now().replace(microsecond=0), t, h, vpd, 'SIM-01']
+        st.session_state.rt_history  = pd.DataFrame(columns=['Thời gian', 'temp', 'humi', 'VPD', 'STT'])
+        st.session_state.rt_running  = False
+        st.session_state.rt_last_gen = None   # Thời điểm sinh dữ liệu gần nhất
 
-    if run_realtime:
-        last_t = st.session_state.rt_history.iloc[-1]['temp']
-        last_h = st.session_state.rt_history.iloc[-1]['humi']
-        new_temp = round(np.clip(last_t + np.random.uniform(-0.5, 0.5), 15, 45), 1)
-        new_humi = round(np.clip(last_h + np.random.uniform(-2, 2), 20, 95), 1)
-        new_vpd = calculate_vpd(new_temp, new_humi)
-
-        new_row = pd.DataFrame([{
+    def init_seed_data():
+        """Tạo 1 điểm dữ liệu mồi ban đầu."""
+        t, h   = 28.0, 75.0
+        vpd    = calculate_vpd(t, h)
+        seed   = pd.DataFrame([{
             'Thời gian': datetime.now().replace(microsecond=0),
-            'temp': new_temp, 'humi': new_humi, 'VPD': new_vpd, 'STT': 'SIM-01'
+            'temp': t, 'humi': h, 'VPD': vpd, 'STT': 'SIM-01'
         }])
-        st.session_state.rt_history = pd.concat([st.session_state.rt_history, new_row], ignore_index=True).tail(100)
+        st.session_state.rt_history  = seed
+        st.session_state.rt_last_gen = datetime.now()
 
-    last_rt = st.session_state.rt_history.iloc[-1]
+    if st.session_state.rt_history.empty:
+        init_seed_data()
+
+    # --- Nút điều khiển ---
+    st.subheader("🎛️ Điều khiển mô phỏng")
+    btn_col1, btn_col2, btn_col3 = st.columns([1, 1, 1])
+
+    with btn_col1:
+        if not st.session_state.rt_running:
+            if st.button("▶️ Bật", use_container_width=True):
+                st.session_state.rt_running  = True
+                st.session_state.rt_last_gen = datetime.now()
+                st.rerun()
+        else:
+            if st.button("⏸️ Tạm dừng", use_container_width=True):
+                st.session_state.rt_running = False
+                st.rerun()
+
+    with btn_col2:
+        if st.button("🔄 Reset dữ liệu", use_container_width=True):
+            init_seed_data()
+            st.session_state.rt_running = False
+            st.success("✅ Đã reset toàn bộ dữ liệu mô phỏng.")
+            st.rerun()
+
+    with btn_col3:
+        st.metric("📊 Số điểm đo", len(st.session_state.rt_history))
+
+    st.divider()
+
+    # --- Sinh dữ liệu mới nếu đang chạy và đã đủ 15 giây ---
+    INTERVAL_SEC = 15  # 15 giây ~ 15 phút thực tế
+
+    if st.session_state.rt_running:
+        now        = datetime.now()
+        last_gen   = st.session_state.rt_last_gen or now
+        elapsed    = (now - last_gen).total_seconds()
+
+        if elapsed >= INTERVAL_SEC:
+            prev       = st.session_state.rt_history.iloc[-1]
+            new_temp   = round(np.clip(prev['temp'] + np.random.uniform(-0.8, 0.8), 15, 45), 1)
+            new_humi   = round(np.clip(prev['humi'] + np.random.uniform(-3,   3),   20, 95), 1)
+            new_vpd    = calculate_vpd(new_temp, new_humi)
+            new_row    = pd.DataFrame([{
+                'Thời gian': now.replace(microsecond=0),
+                'temp': new_temp, 'humi': new_humi, 'VPD': new_vpd, 'STT': 'SIM-01'
+            }])
+            st.session_state.rt_history  = pd.concat(
+                [st.session_state.rt_history, new_row], ignore_index=True
+            ).tail(200)
+            st.session_state.rt_last_gen = now
+
+    # --- Hiển thị trạng thái & đếm ngược ---
+    df_rt    = st.session_state.rt_history
+    last_rt  = df_rt.iloc[-1]
     status_rt, advice_rt, color_rt = get_greenhouse_advice(last_rt['VPD'], selected_crop)
 
-    show_metrics(last_rt, status_rt, advice_rt, color_rt, u_mail, u_pass, t_mail, selected_crop, key_suffix="rt")
-    st.plotly_chart(draw_chart(st.session_state.rt_history, c_info, smooth=False), use_container_width=True)
-
-    st.subheader("📋 Nhật ký mô phỏng")
-    st.dataframe(st.session_state.rt_history.iloc[::-1], use_container_width=True)
-
-    if run_realtime:
-        timer_ph = st.empty()
-        for i in range(60, 0, -1):
-            timer_ph.caption(f"🔄 Đang đợi dữ liệu mới... cập nhật sau {i} giây.")
-            time.sleep(1)
-        st.rerun()
+    if st.session_state.rt_running:
+        elapsed_now = (datetime.now() - (st.session_state.rt_last_gen or datetime.now())).total_seconds()
+        remaining   = max(0, INTERVAL_SEC - int(elapsed_now))
+        st.info(f"🟢 Đang chạy — cập nhật tiếp theo sau **{remaining}** giây  "
+                f"*(mỗi 15 giây = 1 chu kỳ đo ~ 15 phút thực tế)*")
     else:
-        st.warning("⏸️ Mô phỏng đang tạm dừng.")
+        st.warning("⏸️ Mô phỏng đang tạm dừng. Nhấn ▶️ Bật để tiếp tục.")
+
+    # --- Metrics ---
+    show_metrics(
+        last_rt, status_rt, advice_rt, color_rt,
+        u_mail, u_pass, t_mail, selected_crop,
+        key_suffix="rt", df_history=df_rt, source="Realtime SIM-01"
+    )
+
+    # --- Biểu đồ (giống JSON mode) ---
+    if len(df_rt) >= 2:
+        st.plotly_chart(
+            draw_chart(df_rt, c_info, smooth=False,
+                       x_label="Thời gian ghi nhận (mỗi điểm ~ 15 phút thực tế)"),
+            use_container_width=True
+        )
+    else:
+        st.info("📈 Cần ít nhất 2 điểm dữ liệu để vẽ biểu đồ. Nhấn ▶️ Bật và chờ 15 giây.")
+
+    # --- Thống kê ---
+    if len(df_rt) >= 3:
+        st.subheader("📋 Thống kê mô phỏng")
+        st.table(df_rt[['temp', 'humi', 'VPD']].agg(['max', 'min', 'mean']).round(2))
+
+    # --- Bảng nhật ký ---
+    st.subheader("📋 Nhật ký mô phỏng")
+    def highlight_rt(row):
+        if row['VPD'] > c_info['warn_max']:  return ['background-color:#FFC7CE'] * len(row)
+        if row['VPD'] > c_info['ideal_max']: return ['background-color:#FFE0B2'] * len(row)
+        if row['VPD'] < c_info['low']:       return ['background-color:#D6EAF8'] * len(row)
+        return [''] * len(row)
+
+    styled_rt = (
+        df_rt[['Thời gian', 'STT', 'temp', 'humi', 'VPD']]
+        .sort_values('Thời gian', ascending=False)
+        .style.apply(highlight_rt, axis=1)
+    )
+    st.dataframe(styled_rt, use_container_width=True)
+
+    # --- Auto-refresh mỗi 5 giây khi đang chạy ---
+    if st.session_state.rt_running:
+        time.sleep(5)
+        st.rerun()
