@@ -196,7 +196,7 @@ def draw_chart(df_valid, c_info, smooth=True):
     return fig
 
 # --- HÀM HIỂN THỊ METRIC CARD ---
-def show_metrics(last, status, advice, color, u_mail, u_pass, t_mail, selected_crop):
+def show_metrics(last, status, advice, color, u_mail, u_pass, t_mail, selected_crop, key_suffix="default"):
     st.subheader("📍 Thông số mới nhất")
     m1, m2, m3 = st.columns([1, 1.2, 1.8])
     m1.metric("Nhiệt độ", f"{round(last['temp'], 1)} °C")
@@ -207,7 +207,7 @@ def show_metrics(last, status, advice, color, u_mail, u_pass, t_mail, selected_c
     m2.markdown(html_box, unsafe_allow_html=True)
     m3.warning(f"**Chỉ đạo:** {advice}")
     if "🔴" in status or "🔵" in status:
-        if st.button("📧 Gửi Email cảnh báo"):
+        if st.button("📧 Gửi Email cảnh báo", key=f"email_btn_{key_suffix}"):
             if send_email_alert(u_mail, u_pass, t_mail, last['VPD'], status, last['temp'], last['humi']):
                 st.success("✅ Đã gửi!")
             else:
@@ -278,7 +278,7 @@ if mode == "📂 Xem file JSON":
             if not df_valid.empty:
                 last = df_valid.iloc[-1]
                 status, advice, color = get_greenhouse_advice(last['VPD'], selected_crop)
-                show_metrics(last, status, advice, color, u_mail, u_pass, t_mail, selected_crop)
+                show_metrics(last, status, advice, color, u_mail, u_pass, t_mail, selected_crop, key_suffix="file")
                 st.plotly_chart(draw_chart(df_valid, c_info, smooth=True), use_container_width=True)
 
                 st.subheader("📋 Thống kê")
@@ -373,8 +373,9 @@ else:
         last = hist.iloc[-1]
         status, advice, color = get_greenhouse_advice(last['VPD'], selected_crop)
 
+        n_pts = len(st.session_state.rt_history)
         with metric_area.container():
-            show_metrics(last, status, advice, color, u_mail, u_pass, t_mail, selected_crop)
+            show_metrics(last, status, advice, color, u_mail, u_pass, t_mail, selected_crop, key_suffix=f"rt_{n_pts}")
 
         # Biểu đồ realtime — không resample (dữ liệu thưa), chỉ vẽ thẳng
         with chart_area.container():
