@@ -181,23 +181,70 @@ if uploaded_file:
                     else:
                         st.error("❌ Lỗi Gmail!")
 
+            # --- LÀM MƯỢT DỮ LIỆU CHO BIỂU ĐỒ ---
+            # Resample theo giờ (median) → loại nhiễu ngắn hạn → rolling 3h cho đường mượt
+            df_chart = df_valid.copy()
+            if 'Thời gian' in df_chart.columns and not df_chart['Thời gian'].isna().all():
+                df_chart = df_chart.set_index('Thời gian')
+                # IQR filter: loại outlier cực đoan (ngoài 5%-95% ± 2.5*IQR)
+                for col in ['VPD', 'temp', 'humi']:
+                    if col in df_chart.columns:
+                        q1 = df_chart[col].quantile(0.05)
+                        q3 = df_chart[col].quantile(0.95)
+                        iqr = q3 - q1
+                        df_chart.loc[(df_chart[col] < q1 - 2.5*iqr) | (df_chart[col] > q3 + 2.5*iqr), col] = np.nan
+                # Resample 1h lấy median
+                df_chart = df_chart.resample('1h').agg({'VPD': 'median', 'temp': 'median', 'humi': 'median'}).dropna(how='all')
+                # Rolling smooth 3h
+                df_chart['VPD']  = df_chart['VPD'].rolling(3, center=True, min_periods=1).mean()
+                df_chart['temp'] = df_chart['temp'].rolling(3, center=True, min_periods=1).mean()
+                df_chart['humi'] = df_chart['humi'].rolling(3, center=True, min_periods=1).mean()
+                df_chart = df_chart.reset_index()
+                x_col = 'Thời gian'
+            else:
+                df_chart = df_valid.copy()
+                x_col = df_chart.index
+
             # BIỂU ĐỒ DIỄN BIẾN
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1)
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1,
+                                subplot_titles=("VPD (kPa)", "Nhiệt độ & Độ ẩm"))
 
-            # Trace VPD
-            fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['VPD'], name="VPD (kPa)", line=dict(color='green', width=3)), row=1, col=1)
+            # Trace VPD — đường mượt
+            fig.add_trace(go.Scatter(
+                x=df_chart[x_col], y=df_chart['VPD'].round(2),
+                name="VPD (kPa)",
+                line=dict(color='#2E7D32', width=2.5),
+                mode='lines'
+            ), row=1, col=1)
 
-            # Dải màu VPD — đỏ từ 1.5 trở lên
-            fig.add_hrect(y0=0,   y1=0.8, fillcolor="rgba(30, 144, 255, 0.4)", line_width=0, row=1, col=1)  # xanh dương: quá thấp
-            fig.add_hrect(y0=0.8, y1=1.2, fillcolor="rgba(0, 200, 81, 0.4)",   line_width=0, row=1, col=1)  # xanh lá: lý tưởng
-            fig.add_hrect(y0=1.2, y1=1.5, fillcolor="rgba(255, 165, 0, 0.4)",  line_width=0, row=1, col=1)  # cam: cảnh báo
-            fig.add_hrect(y0=1.5, y1=3.0, fillcolor="rgba(255, 75, 75, 0.4)",  line_width=0, row=1, col=1)  # đỏ: quá cao
+            # Dải màu VPD
+            vpd_max = float(max(df_chart['VPD'].max() * 1.15, 3.5)) if not df_chart.empty else 3.5
+            fig.add_hrect(y0=0,     y1=0.8,     fillcolor="rgba(30, 144, 255, 0.35)", line_width=0, row=1, col=1)
+            fig.add_hrect(y0=0.8,   y1=1.2,     fillcolor="rgba(0, 200, 81, 0.35)",   line_width=0, row=1, col=1)
+            fig.add_hrect(y0=1.2,   y1=1.5,     fillcolor="rgba(255, 165, 0, 0.35)",  line_width=0, row=1, col=1)
+            fig.add_hrect(y0=1.5,   y1=vpd_max, fillcolor="rgba(255, 75, 75, 0.35)",  line_width=0, row=1, col=1)
 
             # Trace Temp & Humi
-            fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['temp'], name="Nhiệt độ (°C)"), row=2, col=1)
-            fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['humi'], name="Độ ẩm (%)"), row=2, col=1)
+            fig.add_trace(go.Scatter(
+                x=df_chart[x_col], y=df_chart['temp'].round(1),
+                name="Nhiệt độ (°C)",
+                line=dict(color='#E53935', width=2), mode='lines'
+            ), row=2, col=1)
+            fig.add_trace(go.Scatter(
+                x=df_chart[x_col], y=df_chart['humi'].round(1),
+                name="Độ ẩm (%)",
+                line=dict(color='#1E88E5', width=2), mode='lines'
+            ), row=2, col=1)
 
-            fig.update_layout(height=550, margin=dict(l=20, r=20, t=20, b=20), template="plotly_white", hovermode='x unified')
+            fig.update_layout(
+                height=560,
+                margin=dict(l=20, r=20, t=30, b=20),
+                template="plotly_white",
+                hovermode='x unified',
+                legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1)
+            )
+            fig.update_yaxes(title_text="kPa", row=1, col=1)
+            fig.update_yaxes(title_text="°C / %", row=2, col=1)
             st.plotly_chart(fig, use_container_width=True)
 
             st.subheader("📋 Thống kê")
