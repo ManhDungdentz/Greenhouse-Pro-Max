@@ -10,7 +10,7 @@ from email.mime.multipart import MIMEMultipart
 
 # --- CẤU HÌNH TRANG ---
 st.set_page_config(page_title="Greenhouse Pro Max", layout="wide")
-st.title("🌿 Hệ Thống Giám Sát Nhà Kính (Bản Chuẩn - Sạch Lỗi)")
+st.title("🌿 Hệ Thống Giám Sát Nhà Kính (Bản Full Đầy Đủ)")
 
 # --- HÀM GỬI EMAIL ---
 def send_email_alert(sender_mail, app_password, receiver_mail, vpd, status, temp, humi):
@@ -45,12 +45,11 @@ def calculate_vpd(temp, humi):
 
 def get_greenhouse_advice(vpd, stage, safe_min, safe_max):
     if pd.isna(vpd): return "N/A", "Chờ dữ liệu...", "#808080"
-    # Ngưỡng lý tưởng cố định theo giai đoạn
     if "Cây con" in stage: i_min, i_max = 0.4, 0.8
     elif "Sinh trưởng" in stage: i_min, i_max = 0.8, 1.2
     else: i_min, i_max = 1.2, 1.5
     
-    # Đánh giá dựa trên thanh kéo Safe Range
+    # --- Đánh giá dựa trên Khoảng an toàn chốt từ thanh Range Slider ---
     if vpd < safe_min: return "🔴 QUÁ THẤP", "Nguy cơ nấm bệnh!", "#FF4B4B"
     if i_min <= vpd <= i_max: return "🟢 LÝ TƯỞNG", "Cây phát triển tốt.", "#00C851"
     if vpd > safe_max: return "🔴 QUÁ CAO", "Stress nhiệt nặng!", "#8B0000"
@@ -81,14 +80,16 @@ def process_data(file):
                 df.loc[(df[col] < 20) | (df[col] > 100), col] = np.nan 
     df = df.dropna(subset=['temp', 'humi']).copy()
     
+    # --- FIX LỖI "LÊN CAO ĐỘT NGỘT" ---
     if len(df) > 2:
         df['temp'] = df['temp'].rolling(window=3, center=True, min_periods=1).median()
         df['humi'] = df['humi'].rolling(window=3, center=True, min_periods=1).median()
+    # -----------------------------------
     
     if not df.empty: df['VPD'] = df.apply(lambda r: calculate_vpd(r['temp'], r['humi']), axis=1)
     return df
 
-# --- SIDEBAR ---
+# --- SIDEBAR: CẤU HÌNH & BỘ LỌC ---
 with st.sidebar:
     st.header("📧 Cấu hình Gmail")
     u_mail = st.text_input("Gmail gửi:")
@@ -102,6 +103,7 @@ if uploaded_file:
     if not df.empty:
         st.sidebar.header("🔍 Lọc dữ liệu")
         df['Tháng'] = df['Thời gian'].dt.strftime('%m/%Y')
+        
         filter_mode = st.sidebar.radio("Chế độ lọc thời gian:", ["Tất cả", "Tháng", "Khoảng ngày"])
         
         if filter_mode == "Tháng":
@@ -121,18 +123,29 @@ if uploaded_file:
         sel_stt = st.sidebar.selectbox("📍 Chọn Trạm (STT):", stt_list)
         if sel_stt != "Tất cả": df_work = df_work[df_work['STT'] == sel_stt]
 
-        # Range Slider
+        # --- 1 THANH KÉO (RANGE SLIDER) CÓ 2 ĐẦU ---
+        st.sidebar.divider()
+        
+        # Mặc định theo giai đoạn để thanh kéo tự động nảy số chuẩn
         if "Cây con" in growth_stage: def_val = (0.2, 1.1)
         elif "Sinh trưởng" in growth_stage: def_val = (0.5, 1.5)
         else: def_val = (0.9, 1.8)
 
-        safe_range = st.sidebar.slider("🎚️ Chỉnh khoảng an toàn VPD", 0.0, 3.0, def_val, 0.1)
+        safe_range = st.sidebar.slider(
+            "🎚️ Chỉnh khoảng an toàn VPD",
+            min_value=0.0,
+            max_value=3.0,
+            value=def_val,
+            step=0.1
+        )
         safe_min, safe_max = safe_range
 
         # --- HIỂN THỊ DỮ LIỆU ---
         df_valid = df_work.dropna(subset=['VPD'])
         if not df_valid.empty:
             last = df_valid.iloc[-1]
+            
+            # Đẩy min/max của khoảng an toàn vào hàm để đánh giá trạng thái
             status, advice, color = get_greenhouse_advice(last['VPD'], growth_stage, safe_min, safe_max)
             
             st.subheader("📍 Trạng thái trạm đo")
@@ -150,35 +163,30 @@ if uploaded_file:
                         st.success("✅ Đã gửi báo cáo chi tiết!")
                     else: st.error("❌ Kiểm tra cấu hình Gmail!")
 
-            # BIỂU ĐỒ - GIỮ FORM GỐC CỦA ÔNG
+            # BIỂU ĐỒ
             fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1)
-            
-            # Đường VPD xanh lá
-            fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['VPD'], name="VPD (kPa)", line=dict(color='#2E7D32', width=2.5)), row=1, col=1)
-            
-            # Tô màu vùng an toàn cực nhẹ (Opacity 0.1) để không bị "lỏ"
-            fig.add_hrect(y0=safe_min, y1=safe_max, fillcolor="rgba(0, 200, 81, 0.1)", line_width=0, layer="below", row=1, col=1)
-
+            fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['VPD'], name="VPD (kPa)", line=dict(color='green')), row=1, col=1)
             fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['temp'], name="Nhiệt độ (°C)"), row=2, col=1)
             fig.add_trace(go.Scatter(x=df_valid['Thời gian'], y=df_valid['humi'], name="Độ ẩm (%)"), row=2, col=1)
-            
-            fig.update_layout(height=500, margin=dict(l=20, r=20, t=20, b=20), template="plotly_white")
             st.plotly_chart(fig, use_container_width=True)
 
             # THỐNG KÊ
             st.subheader("📋 Thống kê chi tiết")
             st.table(df_valid[['temp', 'humi', 'VPD']].agg(['max', 'min', 'mean']).round(2))
             
-            # PHẦN NHUỘM MÀU BẢNG
+            # --- PHẦN NHUỘM MÀU BẢNG DỮ LIỆU ---
             def highlight_alert(row):
+                # Báo đỏ nếu văng khỏi dải Range Slider
                 if row['VPD'] < safe_min or row['VPD'] > safe_max:
                     return ['background-color: #FFC7CE; color: #9C0006; font-weight: bold'] * len(row)
                 return [''] * len(row)
 
+            # Áp dụng style vào dataframe
             styled_df = df_valid[['Thời gian', 'STT', 'temp', 'humi', 'VPD']].sort_values('Thời gian', ascending=False).style.apply(highlight_alert, axis=1)
+            
             st.dataframe(styled_df, use_container_width=True)
             
         else:
-            st.error("🚨 Không tìm thấy dữ liệu.")
+            st.error("🚨 Không tìm thấy dữ liệu trong khoảng thời gian/trạm đã chọn.")
 else:
     st.info("👈 Hãy nhập Gmail và tải file JSON ở thanh bên trái.")
