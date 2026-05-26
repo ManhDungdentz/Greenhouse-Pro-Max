@@ -367,6 +367,25 @@ with st.sidebar:
         f"Cảnh báo: > {c_info['warn_max']} kPa"
     )
     st.divider()
+    st.markdown("**⚖️ Chỉnh sai số VPD (kPa):**")
+    vpd_offset = st.slider(
+        label="",
+        min_value=-0.5, max_value=0.5, value=0.0, step=0.05,
+        format="%.2f",
+        help="Dịch chuyển toàn bộ ngưỡng VPD để bù sai số cảm biến"
+    )
+    # Áp dụng sai số vào c_info
+    c_info = {
+        **CROP_VPD[selected_crop],
+        "low":       round(CROP_VPD[selected_crop]["low"]       + vpd_offset, 2),
+        "ideal_min": round(CROP_VPD[selected_crop]["ideal_min"] + vpd_offset, 2),
+        "ideal_max": round(CROP_VPD[selected_crop]["ideal_max"] + vpd_offset, 2),
+        "warn_max":  round(CROP_VPD[selected_crop]["warn_max"]  + vpd_offset, 2),
+    }
+    st.caption(
+        f"Ngưỡng sau bù: **{c_info['ideal_min']} – {c_info['ideal_max']} kPa** "
+        f"| Đỏ: > {c_info['warn_max']} kPa"
+    )
 
     if mode == "📂 Xem file JSON":
         uploaded_file = st.file_uploader("Tải file JSON", type=['json'])
@@ -385,20 +404,15 @@ if mode == "📂 Xem file JSON":
                     sel_m   = st.multiselect("Chọn tháng:", df['Tháng'].unique(), default=df['Tháng'].unique()[-1:])
                     df_work = df[df['Tháng'].isin(sel_m)].copy()
                 elif filter_mode == "Khoảng ngày":
-                    date_range = st.date_input(
-                        "Kéo chọn khoảng ngày:",
-                        value=(df['Thời gian'].min().date(), df['Thời gian'].max().date()),
-                        min_value=df['Thời gian'].min().date(),
-                        max_value=df['Thời gian'].max().date(),
+                    sel_date = st.date_input(
+                        "Chọn ngày:",
+                        value=df["Thời gian"].max().date(),
+                        min_value=df["Thời gian"].min().date(),
+                        max_value=df["Thời gian"].max().date(),
                     )
-                    if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
-                        start = pd.to_datetime(date_range[0])
-                        end   = pd.to_datetime(date_range[1]) + timedelta(days=1)
-                    else:
-                        d     = date_range[0] if isinstance(date_range, (list, tuple)) else date_range
-                        start = pd.to_datetime(d)
-                        end   = start + timedelta(days=1)
-                    df_work = df[(df['Thời gian'] >= start) & (df['Thời gian'] < end)].copy()
+                    start   = pd.to_datetime(sel_date)
+                    end     = start + timedelta(days=1)
+                    df_work = df[(df["Thời gian"] >= start) & (df["Thời gian"] < end)].copy()
                 else:
                     df_work = df.copy()
 
