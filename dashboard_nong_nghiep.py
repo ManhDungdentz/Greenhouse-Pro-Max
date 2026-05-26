@@ -220,15 +220,15 @@ def process_data(file):
     df['temp'] = np.nan
     df['humi'] = np.nan
 
-    # STT 5: tempKK (°F) → °C, humiKK (%)
-    if 'tempKK' in df.columns:
-        mask = df['tempKK'].notna()
-        val  = pd.to_numeric(df.loc[mask, 'tempKK'], errors='coerce')
-        df.loc[mask, 'temp'] = np.where(val > 45, (val - 32) * 5 / 9, val)
-
+    # STT 5: tên cột bị đặt ngược trong firmware
+    # tempKK thực ra là ĐỘ ẨM (%), humiKK thực ra là NHIỆT ĐỘ (°C)
     if 'humiKK' in df.columns:
         mask = df['humiKK'].notna()
-        df.loc[mask, 'humi'] = pd.to_numeric(df.loc[mask, 'humiKK'], errors='coerce')
+        df.loc[mask, 'temp'] = pd.to_numeric(df.loc[mask, 'humiKK'], errors='coerce')
+
+    if 'tempKK' in df.columns:
+        mask = df['tempKK'].notna()
+        df.loc[mask, 'humi'] = pd.to_numeric(df.loc[mask, 'tempKK'], errors='coerce')
 
     # STT 2, 3: Nhiệt Độ / Độ ẩm raw x10 → chia 10
     for col_name in ['Nhiệt Độ', 'Nhiệt độ']:
@@ -275,11 +275,14 @@ def draw_chart(df_valid, c_info, smooth=True, x_label="Thời gian"):
         df_chart['humi'] = df_chart['humi'].rolling(3, center=True, min_periods=1).mean()
         df_chart = df_chart.reset_index()
 
+    # --- 2 subplot: VPD trên, Nhiệt độ+Độ ẩm dual-axis dưới ---
     fig = make_subplots(
         rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.1,
-        subplot_titles=("VPD (kPa)", "Nhiệt độ & Độ ẩm")
+        subplot_titles=("VPD (kPa)", "Nhiệt độ & Độ ẩm"),
+        specs=[[{"secondary_y": False}], [{"secondary_y": True}]]
     )
 
+    # --- Row 1: VPD ---
     fig.add_trace(go.Scatter(
         x=df_chart[x_col], y=df_chart['VPD'].round(2),
         name="VPD (kPa)", line=dict(color='#2E7D32', width=2.5),
@@ -302,20 +305,26 @@ def draw_chart(df_valid, c_info, smooth=True, x_label="Thời gian"):
         fig.add_hline(y=y_val, line_dash="dot", line_color=col,
                       annotation_text=label, annotation_position="top right", row=1, col=1)
 
+    # --- Row 2: Nhiệt độ (trục trái °C) + Độ ẩm (trục phải %) ---
+    # Trục trái: nhiệt độ °C
     fig.add_trace(go.Scatter(
         x=df_chart[x_col], y=df_chart['temp'].round(1),
         name="Nhiệt độ (°C)", line=dict(color='#E53935', width=2),
         mode='lines+markers', marker=dict(size=4)
-    ), row=2, col=1)
+    ), row=2, col=1, secondary_y=False)
+
+    # Trục phải: độ ẩm % — scale khác nhau nên 2 đường sẽ giao thoa tự nhiên
     fig.add_trace(go.Scatter(
         x=df_chart[x_col], y=df_chart['humi'].round(1),
         name="Độ ẩm (%)", line=dict(color='#1E88E5', width=2),
         mode='lines+markers', marker=dict(size=4)
-    ), row=2, col=1)
+    ), row=2, col=1, secondary_y=True)
 
     fig.update_xaxes(title_text=x_label, row=2, col=1)
+    fig.update_yaxes(title_text="°C", row=2, col=1, secondary_y=False, color='#E53935')
+    fig.update_yaxes(title_text="%",  row=2, col=1, secondary_y=True,  color='#1E88E5')
     fig.update_layout(
-        height=540, template="plotly_white", hovermode='x unified',
+        height=560, template="plotly_white", hovermode='x unified',
         margin=dict(l=10, r=10, t=40, b=10),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
